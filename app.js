@@ -18,12 +18,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     initNavigation();
     initAdminPanel();
     initLightbox();
-    await Promise.all([
-        loadSheetData(),
-        loadGallery(),
-        checkFormStatus(),
-    ]);
+
+    // Load each piece independently so one failure doesn't block the rest
+    await loadSheetData().catch(e => console.error('Sheet load failed:', e));
     initMap();
+
+    // Supabase features load in background — don't block page
+    loadGallery().catch(e => console.error('Gallery load failed:', e));
+    checkFormStatus().catch(e => console.error('Form status check failed:', e));
 });
 
 function initSupabase() {
@@ -31,7 +33,13 @@ function initSupabase() {
         console.warn('Supabase not configured. Gallery, form control, and admin features will be limited.');
         return;
     }
-    supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+    try {
+        supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+        console.log('Supabase initialized');
+    } catch (e) {
+        console.error('Supabase init failed:', e);
+        supabase = null;
+    }
 }
 
 // ============================================
