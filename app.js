@@ -1,8 +1,8 @@
 // ============================================
 // BURGER OF THE MONTH CLUB - APPLICATION
+// Uses Supabase REST API directly (no SDK needed)
 // ============================================
 
-let supabase;
 let burgerData = [];
 let galleryPhotos = [];
 let lightboxIndex = 0;
@@ -10,37 +10,85 @@ let map;
 let adminLoggedIn = false;
 
 // ============================================
+// SUPABASE REST HELPERS
+// ============================================
+
+const API_BASE = CONFIG.SUPABASE_URL + '/rest/v1';
+const STORAGE_BASE = CONFIG.SUPABASE_URL + '/storage/v1';
+const API_HEADERS = {
+    'apikey': CONFIG.SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+};
+
+async function dbSelect(table, query = '') {
+    const res = await fetch(`${API_BASE}/${table}?${query}`, {
+        headers: { ...API_HEADERS, 'Accept': 'application/json' },
+    });
+    if (!res.ok) throw new Error(`DB select failed: ${res.status} ${await res.text()}`);
+    return res.json();
+}
+
+async function dbInsert(table, data) {
+    const res = await fetch(`${API_BASE}/${table}`, {
+        method: 'POST',
+        headers: { ...API_HEADERS, 'Prefer': 'return=representation' },
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`DB insert failed: ${res.status} ${await res.text()}`);
+    return res.json();
+}
+
+async function dbUpdate(table, data, matchColumn, matchValue) {
+    const res = await fetch(`${API_BASE}/${table}?${matchColumn}=eq.${matchValue}`, {
+        method: 'PATCH',
+        headers: { ...API_HEADERS, 'Prefer': 'return=representation' },
+        body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`DB update failed: ${res.status} ${await res.text()}`);
+    return res.json();
+}
+
+async function dbDelete(table, matchColumn, matchValue) {
+    const res = await fetch(`${API_BASE}/${table}?${matchColumn}=eq.${matchValue}`, {
+        method: 'DELETE',
+        headers: API_HEADERS,
+    });
+    if (!res.ok) throw new Error(`DB delete failed: ${res.status} ${await res.text()}`);
+}
+
+async function storageUpload(bucket, path, file) {
+    const res = await fetch(`${STORAGE_BASE}/object/${bucket}/${path}`, {
+        method: 'POST',
+        headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+        },
+        body: file,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status} ${await res.text()}`);
+    return `${STORAGE_BASE}/object/public/${bucket}/${path}`;
+}
+
+function isConfigured() {
+    return CONFIG.SUPABASE_URL && CONFIG.SUPABASE_URL !== 'YOUR_SUPABASE_URL';
+}
+
+// ============================================
 // INITIALIZATION
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    initSupabase();
     initNavigation();
     initAdminPanel();
     initLightbox();
 
-    // Load each piece independently so one failure doesn't block the rest
-    await loadSheetData().catch(e => console.error('Sheet load failed:', e));
+    // Load rankings — this is the main content
+    await loadRankings().catch(e => console.error('Rankings load failed:', e));
     initMap();
 
-    // Supabase features load in background — don't block page
+    // Load secondary features in background
     loadGallery().catch(e => console.error('Gallery load failed:', e));
     checkFormStatus().catch(e => console.error('Form status check failed:', e));
 });
-
-function initSupabase() {
-    if (CONFIG.SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-        console.warn('Supabase not configured. Gallery, form control, and admin features will be limited.');
-        return;
-    }
-    try {
-        supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
-        console.log('Supabase initialized');
-    } catch (e) {
-        console.error('Supabase init failed:', e);
-        supabase = null;
-    }
-}
 
 // ============================================
 // NAVIGATION
@@ -55,19 +103,16 @@ function initNavigation() {
         mobileMenu.classList.toggle('open');
     });
 
-    // Close mobile menu on link click
     document.querySelectorAll('.mobile-link').forEach(link => {
         link.addEventListener('click', () => {
             mobileMenu.classList.remove('open');
         });
     });
 
-    // Scroll effect on navbar
     window.addEventListener('scroll', () => {
         navbar.classList.toggle('scrolled', window.scrollY > 10);
     });
 
-    // Active link tracking
     const sections = document.querySelectorAll('.section');
     const navLinks = document.querySelectorAll('.nav-link:not(.admin-toggle)');
     window.addEventListener('scroll', () => {
@@ -88,23 +133,18 @@ function initNavigation() {
 }
 
 // ============================================
-// RANKINGS DATA (Supabase)
+// RANKINGS DATA
 // ============================================
 
-async function loadSheetData() {
-    if (!supabase) {
+async function loadRankings() {
+    if (!isConfigured()) {
         document.getElementById('sheets-table').innerHTML =
             '<tr><td style="padding:20px;text-align:center;color:#999;">Database not connected. Check Supabase config.</td></tr>';
         return;
     }
 
     try {
-        const { data, error } = await supabase
-            .from('results')
-            .select('*')
-            .order('ranking', { ascending: true });
-
-        if (error) throw error;
+        const data = await dbSelect('results', 'select=*&order=ranking.asc');
 
         if (!data || data.length === 0) {
             document.getElementById('sheets-table').innerHTML =
@@ -112,7 +152,6 @@ async function loadSheetData() {
             return;
         }
 
-        // Map Supabase column names to display names
         burgerData = data.map(row => ({
             'Ranking': String(row.ranking || ''),
             'Burger Rating': String(row.burger_rating || ''),
@@ -210,7 +249,6 @@ function parsePrice(priceStr) {
 // MAP (Leaflet.js)
 // ============================================
 
-// Known NYC burger spot coordinates
 const LOCATION_COORDS = {
     'rolo\'s': [40.7033, -73.9065],
     'red hook tavern': [40.6740, -74.0085],
@@ -218,7 +256,7 @@ const LOCATION_COORDS = {
     'virginia\'s': [40.7224, -73.9930],
     'raoul\'s': [40.7263, -74.0012],
     'au cheval': [40.7223, -73.9932],
-    'au chevel': [40.7223, -73.9932],
+    'au chavel': [40.7223, -73.9932],
     'suprema provisions': [40.7505, -73.9946],
     'peter luger': [40.7098, -73.9624],
     'cozy royale': [40.6839, -73.9665],
@@ -244,7 +282,6 @@ function initMap() {
         maxZoom: 18,
     }).addTo(map);
 
-    // Custom red marker icon
     const burgerIcon = L.divIcon({
         className: 'custom-marker',
         html: `<div style="
@@ -264,7 +301,6 @@ function initMap() {
         popupAnchor: [0, -28],
     });
 
-    // Add markers from data
     const seen = new Set();
     burgerData.forEach(row => {
         const name = (row['Restaurant'] || '').toLowerCase();
@@ -274,7 +310,6 @@ function initMap() {
 
         let coords = LOCATION_COORDS[key];
         if (!coords) {
-            // Try partial match
             for (const [locKey, locCoords] of Object.entries(LOCATION_COORDS)) {
                 if (key.includes(locKey) || locKey.includes(key)) {
                     coords = locCoords;
@@ -284,7 +319,6 @@ function initMap() {
         }
 
         if (coords) {
-            // Find best rating for this restaurant
             const ratings = burgerData
                 .filter(r => (r['Restaurant'] || '').toLowerCase().trim() === key)
                 .map(r => parseFloat(r['Burger Rating'] || 0));
@@ -302,37 +336,28 @@ function initMap() {
         }
     });
 
-    // Fix map rendering when section becomes visible
     const observer = new IntersectionObserver(entries => {
         entries.forEach(entry => {
-            if (entry.isIntersecting) {
-                map.invalidateSize();
-            }
+            if (entry.isIntersecting) map.invalidateSize();
         });
     });
     observer.observe(document.getElementById('map'));
 }
 
 // ============================================
-// GALLERY (Supabase Storage)
+// GALLERY
 // ============================================
 
 async function loadGallery() {
     const grid = document.getElementById('gallery-grid');
 
-    if (!supabase) {
+    if (!isConfigured()) {
         grid.innerHTML = '<p class="empty-text">Gallery not available — configure Supabase in config.js</p>';
         return;
     }
 
     try {
-        // Load gallery metadata from supabase table
-        const { data, error } = await supabase
-            .from('gallery')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-        if (error) throw error;
+        const data = await dbSelect('gallery', 'select=*&order=created_at.desc');
 
         if (!data || data.length === 0) {
             grid.innerHTML = '<p class="empty-text">No photos yet. Photos from burger visits will appear here!</p>';
@@ -414,27 +439,22 @@ async function checkFormStatus() {
     const statusDiv = document.getElementById('formStatus');
     const form = document.getElementById('ratingForm');
 
-    if (!supabase) {
+    if (!isConfigured()) {
         statusDiv.innerHTML = '<p>Form not available — configure Supabase in config.js</p>';
         statusDiv.className = 'form-status closed';
         return;
     }
 
     try {
-        const { data, error } = await supabase
-            .from('form_config')
-            .select('*')
-            .eq('id', 1)
-            .single();
+        const data = await dbSelect('form_config', 'select=*&id=eq.1');
+        const config = data[0];
 
-        if (error) throw error;
-
-        if (data && data.is_open) {
+        if (config && config.is_open) {
             statusDiv.innerHTML = `<p style="color:#4caf50;font-weight:700;">Form is OPEN</p>
-                <p>Currently rating: <strong>${data.active_burger || 'Unknown'}</strong></p>`;
+                <p>Currently rating: <strong>${escapeHtml(config.active_burger || 'Unknown')}</strong></p>`;
             statusDiv.className = 'form-status open';
             document.getElementById('currentBurgerInfo').textContent =
-                `Rating: ${data.active_burger || 'Current burger'}`;
+                `Rating: ${config.active_burger || 'Current burger'}`;
             form.style.display = 'block';
         } else {
             statusDiv.innerHTML = '<p>The form is currently <strong>closed</strong>. Check back when the admin opens it for the next burger!</p>';
@@ -443,11 +463,10 @@ async function checkFormStatus() {
         }
     } catch (err) {
         console.error('Form status error:', err);
-        statusDiv.innerHTML = '<p>Could not check form status. Make sure Supabase is configured.</p>';
+        statusDiv.innerHTML = '<p>Could not check form status.</p>';
         statusDiv.className = 'form-status closed';
     }
 
-    // Form submission
     form.addEventListener('submit', handleFormSubmit);
 }
 
@@ -460,12 +479,8 @@ async function handleFormSubmit(e) {
     msg.className = 'form-message';
 
     try {
-        // Get active burger name
-        const { data: config } = await supabase
-            .from('form_config')
-            .select('active_burger, is_open')
-            .eq('id', 1)
-            .single();
+        const configData = await dbSelect('form_config', 'select=active_burger,is_open&id=eq.1');
+        const config = configData[0];
 
         if (!config || !config.is_open) {
             msg.textContent = 'Form has been closed. Your rating was not submitted.';
@@ -487,28 +502,23 @@ async function handleFormSubmit(e) {
         // Upload photo if provided
         const photoFile = document.getElementById('photoUpload').files[0];
         if (photoFile) {
-            const fileName = `ratings/${Date.now()}_${photoFile.name}`;
-            const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('photos')
-                .upload(fileName, photoFile);
-
-            if (!uploadError) {
-                const { data: urlData } = supabase.storage
-                    .from('photos')
-                    .getPublicUrl(fileName);
-                rating.photo_url = urlData.publicUrl;
+            try {
+                const fileName = `ratings/${Date.now()}_${photoFile.name}`;
+                const publicUrl = await storageUpload('photos', fileName, photoFile);
+                rating.photo_url = publicUrl;
 
                 // Also add to gallery
-                await supabase.from('gallery').insert({
-                    url: urlData.publicUrl,
+                await dbInsert('gallery', {
+                    url: publicUrl,
                     restaurant: config.active_burger,
                     caption: `Rated by ${rating.name}`,
                 });
+            } catch (uploadErr) {
+                console.error('Photo upload failed, submitting without photo:', uploadErr);
             }
         }
 
-        const { error } = await supabase.from('ratings').insert(rating);
-        if (error) throw error;
+        await dbInsert('ratings', rating);
 
         msg.textContent = 'Rating submitted! Thanks for your vote.';
         msg.className = 'form-message success';
@@ -526,7 +536,6 @@ async function handleFormSubmit(e) {
 // ============================================
 
 function initAdminPanel() {
-    // Open/close admin
     document.querySelectorAll('.admin-toggle').forEach(btn => {
         btn.addEventListener('click', e => {
             e.preventDefault();
@@ -545,13 +554,11 @@ function initAdminPanel() {
         }
     });
 
-    // Login
     document.getElementById('adminLoginBtn').addEventListener('click', handleAdminLogin);
     document.getElementById('adminPassword').addEventListener('keydown', e => {
         if (e.key === 'Enter') handleAdminLogin();
     });
 
-    // Tabs
     document.querySelectorAll('.admin-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
@@ -561,17 +568,10 @@ function initAdminPanel() {
         });
     });
 
-    // Add burger
     document.getElementById('addBurgerBtn').addEventListener('click', handleAddBurger);
-
-    // Form control
     document.getElementById('activateFormBtn').addEventListener('click', () => handleFormControl(true));
     document.getElementById('deactivateFormBtn').addEventListener('click', () => handleFormControl(false));
-
-    // Gallery upload
     document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
-
-    // Change password
     document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
 }
 
@@ -585,18 +585,13 @@ async function handleAdminLogin() {
     }
 
     const hash = await hashPassword(password);
-    // Check against stored hash - first try Supabase, then fall back to config
     let storedHash = CONFIG.ADMIN_PASSWORD_HASH;
 
-    if (supabase) {
+    if (isConfigured()) {
         try {
-            const { data } = await supabase
-                .from('form_config')
-                .select('admin_hash')
-                .eq('id', 1)
-                .single();
-            if (data && data.admin_hash) {
-                storedHash = data.admin_hash;
+            const data = await dbSelect('form_config', 'select=admin_hash&id=eq.1');
+            if (data[0] && data[0].admin_hash) {
+                storedHash = data[0].admin_hash;
             }
         } catch (e) {
             // Fall back to config hash
@@ -616,37 +611,26 @@ async function handleAdminLogin() {
 }
 
 async function loadAdminData() {
-    if (!supabase) return;
+    if (!isConfigured()) return;
 
-    // Load form status
     try {
-        const { data } = await supabase
-            .from('form_config')
-            .select('*')
-            .eq('id', 1)
-            .single();
-
+        const data = await dbSelect('form_config', 'select=*&id=eq.1');
+        const config = data[0];
         const statusDiv = document.getElementById('formControlStatus');
-        if (data) {
+        if (config) {
             statusDiv.innerHTML = `
-                <p>Status: <span class="${data.is_open ? 'status-open' : 'status-closed'}">
-                    ${data.is_open ? 'OPEN' : 'CLOSED'}
+                <p>Status: <span class="${config.is_open ? 'status-open' : 'status-closed'}">
+                    ${config.is_open ? 'OPEN' : 'CLOSED'}
                 </span></p>
-                ${data.active_burger ? `<p>Active burger: <strong>${data.active_burger}</strong></p>` : ''}
+                ${config.active_burger ? `<p>Active burger: <strong>${escapeHtml(config.active_burger)}</strong></p>` : ''}
             `;
         }
     } catch (e) {
         console.error('Load admin data error:', e);
     }
 
-    // Load submitted ratings
     try {
-        const { data: ratings } = await supabase
-            .from('ratings')
-            .select('*')
-            .order('created_at', { ascending: false })
-            .limit(50);
-
+        const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc&limit=50');
         const ratingsDiv = document.getElementById('submittedRatings');
         if (ratings && ratings.length > 0) {
             ratingsDiv.innerHTML = ratings.map(r => `
@@ -663,18 +647,13 @@ async function loadAdminData() {
         console.error('Load ratings error:', e);
     }
 
-    // Load gallery for admin
     try {
-        const { data: photos } = await supabase
-            .from('gallery')
-            .select('*')
-            .order('created_at', { ascending: false });
-
+        const photos = await dbSelect('gallery', 'select=*&order=created_at.desc');
         const adminGrid = document.getElementById('adminGalleryGrid');
         if (photos && photos.length > 0) {
             adminGrid.innerHTML = photos.map(p => `
                 <div class="admin-gallery-item">
-                    <img src="${p.url}" alt="${p.caption || ''}">
+                    <img src="${escapeHtml(p.url)}" alt="${escapeHtml(p.caption || '')}">
                     <button class="delete-photo" onclick="deletePhoto(${p.id})">&times;</button>
                 </div>
             `).join('');
@@ -700,7 +679,7 @@ function populateBurgerSelect() {
 async function handleAddBurger() {
     const msg = document.getElementById('addBurgerMsg');
 
-    if (!supabase) {
+    if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
         msg.className = 'form-message error';
         return;
@@ -723,19 +702,13 @@ async function handleAddBurger() {
     }
 
     try {
-        const { error } = await supabase.from('burgers').insert(burger);
-        if (error) throw error;
+        await dbInsert('burgers', burger);
 
-        // Also add to results table (ranking will be updated after ratings come in)
-        const { data: maxRank } = await supabase
-            .from('results')
-            .select('ranking')
-            .order('ranking', { ascending: false })
-            .limit(1)
-            .single();
-        const nextRanking = (maxRank ? maxRank.ranking : 0) + 1;
+        // Also add to results table
+        const maxData = await dbSelect('results', 'select=ranking&order=ranking.desc&limit=1');
+        const nextRanking = (maxData[0] ? maxData[0].ranking : 0) + 1;
 
-        await supabase.from('results').insert({
+        await dbInsert('results', {
             ranking: nextRanking,
             burger_rating: null,
             restaurant: burger.restaurant,
@@ -748,7 +721,6 @@ async function handleAddBurger() {
         msg.textContent = 'Burger added to the rankings!';
         msg.className = 'form-message success';
 
-        // Add to the burger select dropdown
         const select = document.getElementById('activateBurgerSelect');
         const opt = document.createElement('option');
         opt.value = burger.restaurant;
@@ -764,7 +736,7 @@ async function handleAddBurger() {
 async function handleFormControl(open) {
     const msg = document.getElementById('formControlMsg');
 
-    if (!supabase) {
+    if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
         msg.className = 'form-message error';
         return;
@@ -781,12 +753,7 @@ async function handleFormControl(open) {
         const update = { is_open: open };
         if (open) update.active_burger = burgerName;
 
-        const { error } = await supabase
-            .from('form_config')
-            .update(update)
-            .eq('id', 1);
-
-        if (error) throw error;
+        await dbUpdate('form_config', update, 'id', 1);
 
         msg.textContent = open ? `Form opened for "${burgerName}"!` : 'Form closed.';
         msg.className = 'form-message success';
@@ -805,7 +772,7 @@ async function handleGalleryUpload() {
     const restaurant = document.getElementById('galleryRestaurant').value;
     const caption = document.getElementById('galleryCaption').value;
 
-    if (!supabase) {
+    if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
         msg.className = 'form-message error';
         return;
@@ -823,18 +790,10 @@ async function handleGalleryUpload() {
     try {
         for (const file of files) {
             const fileName = `gallery/${Date.now()}_${file.name}`;
-            const { error: uploadError } = await supabase.storage
-                .from('photos')
-                .upload(fileName, file);
+            const publicUrl = await storageUpload('photos', fileName, file);
 
-            if (uploadError) throw uploadError;
-
-            const { data: urlData } = supabase.storage
-                .from('photos')
-                .getPublicUrl(fileName);
-
-            await supabase.from('gallery').insert({
-                url: urlData.publicUrl,
+            await dbInsert('gallery', {
+                url: publicUrl,
                 restaurant: restaurant,
                 caption: caption,
             });
@@ -856,8 +815,7 @@ async function deletePhoto(id) {
     if (!confirm('Delete this photo?')) return;
 
     try {
-        const { error } = await supabase.from('gallery').delete().eq('id', id);
-        if (error) throw error;
+        await dbDelete('gallery', 'id', id);
         loadGallery();
         loadAdminData();
     } catch (err) {
@@ -885,15 +843,10 @@ async function handleChangePassword() {
 
     const hash = await hashPassword(newPw);
 
-    if (supabase) {
+    if (isConfigured()) {
         try {
-            const { error } = await supabase
-                .from('form_config')
-                .update({ admin_hash: hash })
-                .eq('id', 1);
-
-            if (error) throw error;
-            msg.textContent = 'Password changed! The new hash has been saved to Supabase.';
+            await dbUpdate('form_config', { admin_hash: hash }, 'id', 1);
+            msg.textContent = 'Password changed!';
             msg.className = 'form-message success';
         } catch (err) {
             msg.textContent = 'Failed to save: ' + err.message;
