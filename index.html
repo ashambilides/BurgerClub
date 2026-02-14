@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Burger of the Month Club</title>
+    <link href="https://fonts.googleapis.com/css2?family=Lobster&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!-- Navigation -->
+    <nav id="navbar">
+        <div class="nav-brand">BotMC</div>
+        <div class="nav-links">
+            <a href="#home" class="nav-link active">Home</a>
+            <a href="#rankings" class="nav-link">Rankings</a>
+            <a href="#map" class="nav-link">Map</a>
+            <a href="#gallery" class="nav-link">Gallery</a>
+            <a href="#rate" class="nav-link">Rate</a>
+            <a href="#" class="nav-link admin-toggle" id="adminToggle">Admin</a>
+        </div>
+        <button class="nav-hamburger" id="hamburger" aria-label="Menu">
+            <span></span><span></span><span></span>
+        </button>
+    </nav>
+
+    <!-- Mobile Menu -->
+    <div class="mobile-menu" id="mobileMenu">
+        <a href="#home" class="mobile-link">Home</a>
+        <a href="#rankings" class="mobile-link">Rankings</a>
+        <a href="#map" class="mobile-link">Map</a>
+        <a href="#gallery" class="mobile-link">Gallery</a>
+        <a href="#rate" class="mobile-link">Rate</a>
+        <a href="#" class="mobile-link admin-toggle" id="adminToggleMobile">Admin</a>
+    </div>
+
+    <!-- Hero / Home Section -->
+    <section id="home" class="section hero-section">
+        <div class="hero-content">
+            <h1 class="hero-title">Burger of the Month Club</h1>
+            <p class="hero-subtitle">Exploring NYC's best burgers, one month at a time.</p>
+        </div>
+        <div class="content-container">
+            <div class="image-container">
+                <img src="burger.jpg" alt="A vibrant burger in a classic NYC diner" id="heroImage">
+            </div>
+            <div class="text-container">
+                <p>Welcome to the Burger of the Month Club! We're a group of friends passionate about exploring NYC's burger scene. Each month, we visit a different burger joint, savor their offerings, and rate them.</p>
+                <p>Our journey began in 2024 when we realized our shared love for burgers could turn into a fun monthly tradition. Since then, we've tasted burgers from all over the city, from classic diners to trendy gastropubs.</p>
+                <p>Our ratings are based on taste, presentation, and overall experience. Whether you're a burger aficionado or just looking for a great meal, check out our scores below!</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Rankings Section -->
+    <section id="rankings" class="section">
+        <h2 class="section-title">Rankings</h2>
+        <div class="table-controls">
+            <input type="text" id="searchBox" placeholder="Search restaurants..." class="search-input">
+            <select id="sortSelect" class="sort-select">
+                <option value="ranking">Sort by Ranking</option>
+                <option value="rating-desc">Highest Rated</option>
+                <option value="rating-asc">Lowest Rated</option>
+                <option value="price-asc">Cheapest First</option>
+                <option value="price-desc">Most Expensive</option>
+                <option value="date-desc">Newest First</option>
+                <option value="date-asc">Oldest First</option>
+            </select>
+        </div>
+        <div class="table-container">
+            <table id="sheets-table">
+                <thead><tr><th>Loading...</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </section>
+
+    <!-- Map Section -->
+    <section id="map" class="section">
+        <h2 class="section-title">Our Burger Map</h2>
+        <p class="section-desc">Every burger spot we've visited, pinned on the map.</p>
+        <div id="burger-map"></div>
+    </section>
+
+    <!-- Gallery Section -->
+    <section id="gallery" class="section">
+        <h2 class="section-title">Burger Gallery</h2>
+        <p class="section-desc">A visual journey through our burger adventures.</p>
+        <div id="gallery-grid" class="gallery-grid">
+            <p class="loading-text">Loading gallery...</p>
+        </div>
+    </section>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox" style="display:none;">
+        <button class="lightbox-close" id="lightboxClose">&times;</button>
+        <button class="lightbox-nav lightbox-prev" id="lightboxPrev">&#10094;</button>
+        <img id="lightboxImg" src="" alt="Burger photo">
+        <button class="lightbox-nav lightbox-next" id="lightboxNext">&#10095;</button>
+        <div class="lightbox-caption" id="lightboxCaption"></div>
+    </div>
+
+    <!-- Rating Form Section -->
+    <section id="rate" class="section">
+        <h2 class="section-title">Rate This Month's Burger</h2>
+        <div id="formStatus" class="form-status">
+            <p>Checking form availability...</p>
+        </div>
+        <form id="ratingForm" class="rating-form" style="display:none;">
+            <div class="form-current-burger" id="currentBurgerInfo"></div>
+            <div class="form-group">
+                <label for="raterName">Your Name *</label>
+                <input type="text" id="raterName" required placeholder="Enter your name">
+            </div>
+            <div class="form-group">
+                <label for="toppingsRating">Toppings (1-10) *</label>
+                <input type="number" id="toppingsRating" min="1" max="10" step="0.1" required placeholder="Rate the toppings">
+            </div>
+            <div class="form-group">
+                <label for="bunRating">Bun (1-10) *</label>
+                <input type="number" id="bunRating" min="1" max="10" step="0.1" required placeholder="Rate the bun">
+            </div>
+            <div class="form-group">
+                <label for="donenessRating">Doneness (1-10) *</label>
+                <input type="number" id="donenessRating" min="1" max="10" step="0.1" required placeholder="Rate the doneness">
+            </div>
+            <div class="form-group">
+                <label for="flavorRating">Overall Flavor (1-10) *</label>
+                <input type="number" id="flavorRating" min="1" max="10" step="0.1" required placeholder="Rate the overall flavor">
+            </div>
+            <div class="form-group">
+                <label for="photoUpload">Upload a Photo (optional)</label>
+                <input type="file" id="photoUpload" accept="image/*">
+            </div>
+            <button type="submit" class="btn btn-primary" id="submitBtn">Submit Rating</button>
+            <div id="formMessage" class="form-message"></div>
+        </form>
+    </section>
+
+    <!-- Admin Panel -->
+    <div id="adminOverlay" class="admin-overlay" style="display:none;">
+        <div class="admin-panel">
+            <div class="admin-header">
+                <h2>Admin Panel</h2>
+                <button class="admin-close" id="adminClose">&times;</button>
+            </div>
+
+            <!-- Login -->
+            <div id="adminLogin" class="admin-section">
+                <div class="form-group">
+                    <label for="adminPassword">Admin Password</label>
+                    <input type="password" id="adminPassword" placeholder="Enter admin password">
+                </div>
+                <button class="btn btn-primary" id="adminLoginBtn">Login</button>
+                <p id="adminLoginError" class="error-text"></p>
+            </div>
+
+            <!-- Admin Content (hidden until logged in) -->
+            <div id="adminContent" style="display:none;">
+                <div class="admin-tabs">
+                    <button class="admin-tab active" data-tab="manageBurger">Manage Burger</button>
+                    <button class="admin-tab" data-tab="manageForm">Form Control</button>
+                    <button class="admin-tab" data-tab="manageGallery">Gallery</button>
+                    <button class="admin-tab" data-tab="manageSettings">Settings</button>
+                </div>
+
+                <!-- Manage Burger Tab -->
+                <div class="admin-tab-content active" id="tab-manageBurger">
+                    <h3>Add New Burger</h3>
+                    <div class="form-group">
+                        <label for="newRestaurant">Restaurant Name *</label>
+                        <input type="text" id="newRestaurant" placeholder="e.g. Rolo's">
+                    </div>
+                    <div class="form-group">
+                        <label for="newDescription">Description *</label>
+                        <input type="text" id="newDescription" placeholder="e.g. Double cheeseburger, grilled onions...">
+                    </div>
+                    <div class="form-group">
+                        <label for="newPrice">Price *</label>
+                        <input type="text" id="newPrice" placeholder="e.g. $20.00">
+                    </div>
+                    <div class="form-group">
+                        <label for="newLocation">Location *</label>
+                        <input type="text" id="newLocation" placeholder="e.g. Manhattan NY">
+                    </div>
+                    <div class="form-group">
+                        <label for="newDate">Date of Visit *</label>
+                        <input type="date" id="newDate">
+                    </div>
+                    <div class="form-group">
+                        <label for="newLat">Latitude (for map pin)</label>
+                        <input type="number" id="newLat" step="any" placeholder="e.g. 40.7128">
+                    </div>
+                    <div class="form-group">
+                        <label for="newLng">Longitude (for map pin)</label>
+                        <input type="number" id="newLng" step="any" placeholder="e.g. -74.0060">
+                    </div>
+                    <button class="btn btn-primary" id="addBurgerBtn">Add Burger</button>
+                    <p id="addBurgerMsg" class="form-message"></p>
+                </div>
+
+                <!-- Form Control Tab -->
+                <div class="admin-tab-content" id="tab-manageForm">
+                    <h3>Form Access Control</h3>
+                    <div id="formControlStatus" class="form-control-box">
+                        <p>Loading...</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="activateBurgerSelect">Select Burger to Activate</label>
+                        <select id="activateBurgerSelect" class="sort-select">
+                            <option value="">-- Select a burger --</option>
+                        </select>
+                    </div>
+                    <div class="admin-btn-row">
+                        <button class="btn btn-primary" id="activateFormBtn">Open Form</button>
+                        <button class="btn btn-danger" id="deactivateFormBtn">Close Form</button>
+                    </div>
+                    <p id="formControlMsg" class="form-message"></p>
+
+                    <h3 style="margin-top:20px;">Submitted Ratings</h3>
+                    <div id="submittedRatings" class="submitted-ratings">
+                        <p>Loading...</p>
+                    </div>
+                </div>
+
+                <!-- Gallery Management Tab -->
+                <div class="admin-tab-content" id="tab-manageGallery">
+                    <h3>Upload Photos to Gallery</h3>
+                    <div class="form-group">
+                        <label for="galleryRestaurant">Restaurant Name</label>
+                        <input type="text" id="galleryRestaurant" placeholder="Which burger spot?">
+                    </div>
+                    <div class="form-group">
+                        <label for="galleryCaption">Caption</label>
+                        <input type="text" id="galleryCaption" placeholder="Describe the photo">
+                    </div>
+                    <div class="form-group">
+                        <label for="galleryPhoto">Photo</label>
+                        <input type="file" id="galleryPhoto" accept="image/*" multiple>
+                    </div>
+                    <button class="btn btn-primary" id="uploadGalleryBtn">Upload</button>
+                    <p id="galleryUploadMsg" class="form-message"></p>
+
+                    <h3 style="margin-top:20px;">Manage Gallery Photos</h3>
+                    <div id="adminGalleryGrid" class="admin-gallery-grid">
+                        <p>Loading...</p>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div class="admin-tab-content" id="tab-manageSettings">
+                    <h3>Change Admin Password</h3>
+                    <div class="form-group">
+                        <label for="newAdminPassword">New Password</label>
+                        <input type="password" id="newAdminPassword" placeholder="New password">
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmAdminPassword">Confirm Password</label>
+                        <input type="password" id="confirmAdminPassword" placeholder="Confirm new password">
+                    </div>
+                    <button class="btn btn-primary" id="changePasswordBtn">Change Password</button>
+                    <p id="changePasswordMsg" class="form-message"></p>
+
+                    <h3 style="margin-top:20px;">Supabase Config</h3>
+                    <p class="config-note">These are stored in config.js. Update them there if needed.</p>
+                    <div class="form-group">
+                        <label>Project URL</label>
+                        <input type="text" readonly id="showSupabaseUrl" class="readonly-input">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+        <p>&copy; 2024-2026 Burger of the Month Club &bull; NYC</p>
+    </footer>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

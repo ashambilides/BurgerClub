@@ -1,0 +1,885 @@
+// ============================================
+// BURGER OF THE MONTH CLUB - APPLICATION
+// ============================================
+
+let supabase;
+let burgerData = [];
+let galleryPhotos = [];
+let lightboxIndex = 0;
+let map;
+let adminLoggedIn = false;
+
+// ============================================
+// INITIALIZATION
+// ============================================
+
+document.addEventListener('DOMContentLoaded', async () => {
+    initSupabase();
+    initNavigation();
+    initAdminPanel();
+    initLightbox();
+    await Promise.all([
+        loadSheetData(),
+        loadGallery(),
+        checkFormStatus(),
+    ]);
+    initMap();
+});
+
+function initSupabase() {
+    if (CONFIG.SUPABASE_URL === 'YOUR_SUPABASE_URL') {
+        console.warn('Supabase not configured. Gallery, form control, and admin features will be limited.');
+        return;
+    }
+    supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+}
+
+// ============================================
+// NAVIGATION
+// ============================================
+
+function initNavigation() {
+    const hamburger = document.getElementById('hamburger');
+    const mobileMenu = document.getElementById('mobileMenu');
+    const navbar = document.getElementById('navbar');
+
+    hamburger.addEventListener('click', () => {
+        mobileMenu.classList.toggle('open');
+    });
+
+    // Close mobile menu on link click
+    document.querySelectorAll('.mobile-link').forEach(link => {
+        link.addEventListener('click', () => {
+            mobileMenu.classList.remove('open');
+        });
+    });
+
+    // Scroll effect on navbar
+    window.addEventListener('scroll', () => {
+        navbar.classList.toggle('scrolled', window.scrollY > 10);
+    });
+
+    // Active link tracking
+    const sections = document.querySelectorAll('.section');
+    const navLinks = document.querySelectorAll('.nav-link:not(.admin-toggle)');
+    window.addEventListener('scroll', () => {
+        let current = '';
+        sections.forEach(section => {
+            const top = section.offsetTop - 100;
+            if (window.scrollY >= top) {
+                current = section.getAttribute('id');
+            }
+        });
+        navLinks.forEach(link => {
+            link.classList.remove('active');
+            if (link.getAttribute('href') === '#' + current) {
+                link.classList.add('active');
+            }
+        });
+    });
+}
+
+// ============================================
+// GOOGLE SHEETS DATA
+// ============================================
+
+async function loadSheetData() {
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.GOOGLE_SHEET_ID}/values/${CONFIG.SHEET_RANGE}?key=${CONFIG.GOOGLE_API_KEY}`;
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
+        const data = await response.json();
+        const values = data.values;
+        if (!values || values.length === 0) {
+            console.error('No data found.');
+            return;
+        }
+
+        // Parse data into objects
+        const headers = values[0];
+        burgerData = values.slice(1).map(row => {
+            const obj = {};
+            headers.forEach((h, i) => {
+                obj[h] = row[i] || '';
+            });
+            return obj;
+        });
+
+        renderTable(burgerData);
+        initTableControls();
+        populateBurgerSelect();
+    } catch (error) {
+        console.error('Error fetching sheet data:', error);
+        document.getElementById('sheets-table').innerHTML =
+            '<tr><td style="padding:20px;text-align:center;color:#999;">Failed to load data. Check your API key and Sheet ID in config.js.</td></tr>';
+    }
+}
+
+function renderTable(data) {
+    const table = document.getElementById('sheets-table');
+    const headers = ['Ranking', 'Burger Rating', 'Restaurant', 'Description', 'Price', 'Location', 'Date of Visit'];
+
+    table.innerHTML = `
+        <thead>
+            <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+        </thead>
+        <tbody>
+            ${data.map(row => `
+                <tr>
+                    <td class="rank-cell">${escapeHtml(row['Ranking'])}</td>
+                    <td class="rating-cell">${escapeHtml(row['Burger Rating'])}</td>
+                    <td><strong>${escapeHtml(row['Restaurant'])}</strong></td>
+                    <td>${escapeHtml(row['Description'])}</td>
+                    <td>${escapeHtml(row['Price'])}</td>
+                    <td>${escapeHtml(row['Location'])}</td>
+                    <td>${escapeHtml(row['Date of Visit'])}</td>
+                </tr>
+            `).join('')}
+        </tbody>
+    `;
+}
+
+function initTableControls() {
+    const searchBox = document.getElementById('searchBox');
+    const sortSelect = document.getElementById('sortSelect');
+
+    searchBox.addEventListener('input', () => filterAndSort());
+    sortSelect.addEventListener('change', () => filterAndSort());
+}
+
+function filterAndSort() {
+    const query = document.getElementById('searchBox').value.toLowerCase();
+    const sortBy = document.getElementById('sortSelect').value;
+
+    let filtered = burgerData.filter(row => {
+        return (
+            (row['Restaurant'] || '').toLowerCase().includes(query) ||
+            (row['Description'] || '').toLowerCase().includes(query) ||
+            (row['Location'] || '').toLowerCase().includes(query)
+        );
+    });
+
+    filtered.sort((a, b) => {
+        switch (sortBy) {
+            case 'ranking':
+                return parseFloat(a['Ranking'] || 999) - parseFloat(b['Ranking'] || 999);
+            case 'rating-desc':
+                return parseFloat(b['Burger Rating'] || 0) - parseFloat(a['Burger Rating'] || 0);
+            case 'rating-asc':
+                return parseFloat(a['Burger Rating'] || 0) - parseFloat(b['Burger Rating'] || 0);
+            case 'price-asc':
+                return parsePrice(a['Price']) - parsePrice(b['Price']);
+            case 'price-desc':
+                return parsePrice(b['Price']) - parsePrice(a['Price']);
+            case 'date-desc':
+                return new Date(b['Date of Visit'] || 0) - new Date(a['Date of Visit'] || 0);
+            case 'date-asc':
+                return new Date(a['Date of Visit'] || 0) - new Date(b['Date of Visit'] || 0);
+            default:
+                return 0;
+        }
+    });
+
+    renderTable(filtered);
+}
+
+function parsePrice(priceStr) {
+    if (!priceStr) return 0;
+    return parseFloat(priceStr.replace(/[^0-9.]/g, '')) || 0;
+}
+
+// ============================================
+// MAP (Leaflet.js)
+// ============================================
+
+// Known NYC burger spot coordinates
+const LOCATION_COORDS = {
+    'rolo\'s': [40.7033, -73.9065],
+    'red hook tavern': [40.6740, -74.0085],
+    'the lions bar & grill': [40.7580, -73.9855],
+    'virginia\'s': [40.7224, -73.9930],
+    'raoul\'s': [40.7263, -74.0012],
+    'au cheval': [40.7223, -73.9932],
+    'au chevel': [40.7223, -73.9932],
+    'suprema provisions': [40.7505, -73.9946],
+    'peter luger': [40.7098, -73.9624],
+    'cozy royale': [40.6839, -73.9665],
+    'minetta tavern': [40.7303, -73.9995],
+    'hamburger america': [40.7267, -73.9876],
+    'gotham burger': [40.7484, -73.9880],
+    'nowon': [40.7112, -73.9516],
+    'smacking burger': [40.7484, -73.9871],
+    'fairfax': [40.7276, -73.9847],
+    'petey\'s burger': [40.7427, -73.9234],
+    'burger by day': [40.7484, -73.9880],
+    'jg melon': [40.7727, -73.9585],
+    'corner bistro': [40.7381, -74.0032],
+};
+
+function initMap() {
+    if (!document.getElementById('burger-map')) return;
+
+    map = L.map('burger-map').setView(CONFIG.MAP_CENTER, CONFIG.MAP_ZOOM);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 18,
+    }).addTo(map);
+
+    // Custom red marker icon
+    const burgerIcon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="
+            background: #d32f2f;
+            width: 28px;
+            height: 28px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            border: 3px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        "><span style="transform:rotate(45deg);font-size:12px;">&#127828;</span></div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 28],
+        popupAnchor: [0, -28],
+    });
+
+    // Add markers from data
+    const seen = new Set();
+    burgerData.forEach(row => {
+        const name = (row['Restaurant'] || '').toLowerCase();
+        const key = name.trim();
+        if (seen.has(key) || !key) return;
+        seen.add(key);
+
+        let coords = LOCATION_COORDS[key];
+        if (!coords) {
+            // Try partial match
+            for (const [locKey, locCoords] of Object.entries(LOCATION_COORDS)) {
+                if (key.includes(locKey) || locKey.includes(key)) {
+                    coords = locCoords;
+                    break;
+                }
+            }
+        }
+
+        if (coords) {
+            // Find best rating for this restaurant
+            const ratings = burgerData
+                .filter(r => (r['Restaurant'] || '').toLowerCase().trim() === key)
+                .map(r => parseFloat(r['Burger Rating'] || 0));
+            const bestRating = Math.max(...ratings);
+
+            const marker = L.marker(coords, { icon: burgerIcon }).addTo(map);
+            marker.bindPopup(`
+                <div class="map-popup">
+                    <h3>${escapeHtml(row['Restaurant'])}</h3>
+                    <div class="popup-rating">${bestRating.toFixed(2)}</div>
+                    <div class="popup-detail">${escapeHtml(row['Location'])}</div>
+                    <div class="popup-detail">${escapeHtml(row['Price'])}</div>
+                </div>
+            `);
+        }
+    });
+
+    // Fix map rendering when section becomes visible
+    const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                map.invalidateSize();
+            }
+        });
+    });
+    observer.observe(document.getElementById('map'));
+}
+
+// ============================================
+// GALLERY (Supabase Storage)
+// ============================================
+
+async function loadGallery() {
+    const grid = document.getElementById('gallery-grid');
+
+    if (!supabase) {
+        grid.innerHTML = '<p class="empty-text">Gallery not available — configure Supabase in config.js</p>';
+        return;
+    }
+
+    try {
+        // Load gallery metadata from supabase table
+        const { data, error } = await supabase
+            .from('gallery')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+            grid.innerHTML = '<p class="empty-text">No photos yet. Photos from burger visits will appear here!</p>';
+            return;
+        }
+
+        galleryPhotos = data;
+        renderGallery(data, grid);
+    } catch (err) {
+        console.error('Gallery load error:', err);
+        grid.innerHTML = '<p class="empty-text">Could not load gallery. Make sure Supabase tables are set up.</p>';
+    }
+}
+
+function renderGallery(photos, container) {
+    container.innerHTML = photos.map((photo, i) => `
+        <div class="gallery-item" data-index="${i}" onclick="openLightbox(${i})">
+            <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.caption || 'Burger photo')}" loading="lazy">
+            <div class="gallery-caption">
+                <strong>${escapeHtml(photo.restaurant)}</strong>
+                ${escapeHtml(photo.caption)}
+            </div>
+        </div>
+    `).join('');
+}
+
+// ============================================
+// LIGHTBOX
+// ============================================
+
+function initLightbox() {
+    document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+    document.getElementById('lightboxPrev').addEventListener('click', () => navigateLightbox(-1));
+    document.getElementById('lightboxNext').addEventListener('click', () => navigateLightbox(1));
+
+    document.getElementById('lightbox').addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeLightbox();
+    });
+
+    document.addEventListener('keydown', e => {
+        const lb = document.getElementById('lightbox');
+        if (lb.style.display === 'none') return;
+        if (e.key === 'Escape') closeLightbox();
+        if (e.key === 'ArrowLeft') navigateLightbox(-1);
+        if (e.key === 'ArrowRight') navigateLightbox(1);
+    });
+}
+
+function openLightbox(index) {
+    if (!galleryPhotos.length) return;
+    lightboxIndex = index;
+    updateLightbox();
+    document.getElementById('lightbox').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeLightbox() {
+    document.getElementById('lightbox').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+function navigateLightbox(dir) {
+    lightboxIndex = (lightboxIndex + dir + galleryPhotos.length) % galleryPhotos.length;
+    updateLightbox();
+}
+
+function updateLightbox() {
+    const photo = galleryPhotos[lightboxIndex];
+    document.getElementById('lightboxImg').src = photo.url;
+    document.getElementById('lightboxCaption').textContent =
+        `${photo.restaurant || ''} ${photo.caption ? '— ' + photo.caption : ''}`.trim();
+}
+
+// ============================================
+// RATING FORM
+// ============================================
+
+async function checkFormStatus() {
+    const statusDiv = document.getElementById('formStatus');
+    const form = document.getElementById('ratingForm');
+
+    if (!supabase) {
+        statusDiv.innerHTML = '<p>Form not available — configure Supabase in config.js</p>';
+        statusDiv.className = 'form-status closed';
+        return;
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('form_config')
+            .select('*')
+            .eq('id', 1)
+            .single();
+
+        if (error) throw error;
+
+        if (data && data.is_open) {
+            statusDiv.innerHTML = `<p style="color:#4caf50;font-weight:700;">Form is OPEN</p>
+                <p>Currently rating: <strong>${data.active_burger || 'Unknown'}</strong></p>`;
+            statusDiv.className = 'form-status open';
+            document.getElementById('currentBurgerInfo').textContent =
+                `Rating: ${data.active_burger || 'Current burger'}`;
+            form.style.display = 'block';
+        } else {
+            statusDiv.innerHTML = '<p>The form is currently <strong>closed</strong>. Check back when the admin opens it for the next burger!</p>';
+            statusDiv.className = 'form-status closed';
+            form.style.display = 'none';
+        }
+    } catch (err) {
+        console.error('Form status error:', err);
+        statusDiv.innerHTML = '<p>Could not check form status. Make sure Supabase is configured.</p>';
+        statusDiv.className = 'form-status closed';
+    }
+
+    // Form submission
+    form.addEventListener('submit', handleFormSubmit);
+}
+
+async function handleFormSubmit(e) {
+    e.preventDefault();
+    const submitBtn = document.getElementById('submitBtn');
+    const msg = document.getElementById('formMessage');
+    submitBtn.disabled = true;
+    msg.textContent = 'Submitting...';
+    msg.className = 'form-message';
+
+    try {
+        // Get active burger name
+        const { data: config } = await supabase
+            .from('form_config')
+            .select('active_burger, is_open')
+            .eq('id', 1)
+            .single();
+
+        if (!config || !config.is_open) {
+            msg.textContent = 'Form has been closed. Your rating was not submitted.';
+            msg.className = 'form-message error';
+            submitBtn.disabled = false;
+            return;
+        }
+
+        const rating = {
+            burger: config.active_burger,
+            name: document.getElementById('raterName').value,
+            toppings: parseFloat(document.getElementById('toppingsRating').value),
+            bun: parseFloat(document.getElementById('bunRating').value),
+            doneness: parseFloat(document.getElementById('donenessRating').value),
+            flavor: parseFloat(document.getElementById('flavorRating').value),
+            created_at: new Date().toISOString(),
+        };
+
+        // Upload photo if provided
+        const photoFile = document.getElementById('photoUpload').files[0];
+        if (photoFile) {
+            const fileName = `ratings/${Date.now()}_${photoFile.name}`;
+            const { data: uploadData, error: uploadError } = await supabase.storage
+                .from('photos')
+                .upload(fileName, photoFile);
+
+            if (!uploadError) {
+                const { data: urlData } = supabase.storage
+                    .from('photos')
+                    .getPublicUrl(fileName);
+                rating.photo_url = urlData.publicUrl;
+
+                // Also add to gallery
+                await supabase.from('gallery').insert({
+                    url: urlData.publicUrl,
+                    restaurant: config.active_burger,
+                    caption: `Rated by ${rating.name}`,
+                });
+            }
+        }
+
+        const { error } = await supabase.from('ratings').insert(rating);
+        if (error) throw error;
+
+        msg.textContent = 'Rating submitted! Thanks for your vote.';
+        msg.className = 'form-message success';
+        e.target.reset();
+    } catch (err) {
+        console.error('Submit error:', err);
+        msg.textContent = 'Failed to submit. Please try again.';
+        msg.className = 'form-message error';
+    }
+    submitBtn.disabled = false;
+}
+
+// ============================================
+// ADMIN PANEL
+// ============================================
+
+function initAdminPanel() {
+    // Open/close admin
+    document.querySelectorAll('.admin-toggle').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            document.getElementById('adminOverlay').style.display = 'flex';
+            document.getElementById('mobileMenu').classList.remove('open');
+        });
+    });
+
+    document.getElementById('adminClose').addEventListener('click', () => {
+        document.getElementById('adminOverlay').style.display = 'none';
+    });
+
+    document.getElementById('adminOverlay').addEventListener('click', e => {
+        if (e.target === e.currentTarget) {
+            document.getElementById('adminOverlay').style.display = 'none';
+        }
+    });
+
+    // Login
+    document.getElementById('adminLoginBtn').addEventListener('click', handleAdminLogin);
+    document.getElementById('adminPassword').addEventListener('keydown', e => {
+        if (e.key === 'Enter') handleAdminLogin();
+    });
+
+    // Tabs
+    document.querySelectorAll('.admin-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.admin-tab-content').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        });
+    });
+
+    // Add burger
+    document.getElementById('addBurgerBtn').addEventListener('click', handleAddBurger);
+
+    // Form control
+    document.getElementById('activateFormBtn').addEventListener('click', () => handleFormControl(true));
+    document.getElementById('deactivateFormBtn').addEventListener('click', () => handleFormControl(false));
+
+    // Gallery upload
+    document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
+
+    // Change password
+    document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
+}
+
+async function handleAdminLogin() {
+    const password = document.getElementById('adminPassword').value;
+    const errorEl = document.getElementById('adminLoginError');
+
+    if (!password) {
+        errorEl.textContent = 'Please enter a password.';
+        return;
+    }
+
+    const hash = await hashPassword(password);
+    // Check against stored hash - first try Supabase, then fall back to config
+    let storedHash = CONFIG.ADMIN_PASSWORD_HASH;
+
+    if (supabase) {
+        try {
+            const { data } = await supabase
+                .from('form_config')
+                .select('admin_hash')
+                .eq('id', 1)
+                .single();
+            if (data && data.admin_hash) {
+                storedHash = data.admin_hash;
+            }
+        } catch (e) {
+            // Fall back to config hash
+        }
+    }
+
+    if (hash === storedHash) {
+        adminLoggedIn = true;
+        errorEl.textContent = '';
+        document.getElementById('adminLogin').style.display = 'none';
+        document.getElementById('adminContent').style.display = 'block';
+        document.getElementById('showSupabaseUrl').value = CONFIG.SUPABASE_URL;
+        loadAdminData();
+    } else {
+        errorEl.textContent = 'Incorrect password.';
+    }
+}
+
+async function loadAdminData() {
+    if (!supabase) return;
+
+    // Load form status
+    try {
+        const { data } = await supabase
+            .from('form_config')
+            .select('*')
+            .eq('id', 1)
+            .single();
+
+        const statusDiv = document.getElementById('formControlStatus');
+        if (data) {
+            statusDiv.innerHTML = `
+                <p>Status: <span class="${data.is_open ? 'status-open' : 'status-closed'}">
+                    ${data.is_open ? 'OPEN' : 'CLOSED'}
+                </span></p>
+                ${data.active_burger ? `<p>Active burger: <strong>${data.active_burger}</strong></p>` : ''}
+            `;
+        }
+    } catch (e) {
+        console.error('Load admin data error:', e);
+    }
+
+    // Load submitted ratings
+    try {
+        const { data: ratings } = await supabase
+            .from('ratings')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(50);
+
+        const ratingsDiv = document.getElementById('submittedRatings');
+        if (ratings && ratings.length > 0) {
+            ratingsDiv.innerHTML = ratings.map(r => `
+                <div class="rating-entry">
+                    <strong>${escapeHtml(r.name)}</strong> rated <strong>${escapeHtml(r.burger)}</strong><br>
+                    Toppings: ${r.toppings} | Bun: ${r.bun} | Doneness: ${r.doneness} | Flavor: ${r.flavor}<br>
+                    <small style="color:#999;">${new Date(r.created_at).toLocaleString()}</small>
+                </div>
+            `).join('');
+        } else {
+            ratingsDiv.innerHTML = '<p style="color:#999;">No ratings submitted yet.</p>';
+        }
+    } catch (e) {
+        console.error('Load ratings error:', e);
+    }
+
+    // Load gallery for admin
+    try {
+        const { data: photos } = await supabase
+            .from('gallery')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+        const adminGrid = document.getElementById('adminGalleryGrid');
+        if (photos && photos.length > 0) {
+            adminGrid.innerHTML = photos.map(p => `
+                <div class="admin-gallery-item">
+                    <img src="${p.url}" alt="${p.caption || ''}">
+                    <button class="delete-photo" onclick="deletePhoto(${p.id})">&times;</button>
+                </div>
+            `).join('');
+        } else {
+            adminGrid.innerHTML = '<p style="color:#999;">No photos in gallery.</p>';
+        }
+    } catch (e) {
+        console.error('Load gallery admin error:', e);
+    }
+}
+
+function populateBurgerSelect() {
+    const select = document.getElementById('activateBurgerSelect');
+    const unique = [...new Set(burgerData.map(r => r['Restaurant']))].filter(Boolean);
+    unique.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+    });
+}
+
+async function handleAddBurger() {
+    const msg = document.getElementById('addBurgerMsg');
+
+    if (!supabase) {
+        msg.textContent = 'Supabase not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    const burger = {
+        restaurant: document.getElementById('newRestaurant').value,
+        description: document.getElementById('newDescription').value,
+        price: document.getElementById('newPrice').value,
+        location: document.getElementById('newLocation').value,
+        date_of_visit: document.getElementById('newDate').value,
+        lat: parseFloat(document.getElementById('newLat').value) || null,
+        lng: parseFloat(document.getElementById('newLng').value) || null,
+    };
+
+    if (!burger.restaurant || !burger.description || !burger.price || !burger.location) {
+        msg.textContent = 'Please fill in all required fields.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    try {
+        const { error } = await supabase.from('burgers').insert(burger);
+        if (error) throw error;
+        msg.textContent = 'Burger added! Note: Rankings in Google Sheets must be updated manually.';
+        msg.className = 'form-message success';
+
+        // Add to the burger select dropdown
+        const select = document.getElementById('activateBurgerSelect');
+        const opt = document.createElement('option');
+        opt.value = burger.restaurant;
+        opt.textContent = burger.restaurant;
+        select.appendChild(opt);
+    } catch (err) {
+        console.error('Add burger error:', err);
+        msg.textContent = 'Failed to add burger: ' + err.message;
+        msg.className = 'form-message error';
+    }
+}
+
+async function handleFormControl(open) {
+    const msg = document.getElementById('formControlMsg');
+
+    if (!supabase) {
+        msg.textContent = 'Supabase not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    const burgerName = document.getElementById('activateBurgerSelect').value;
+    if (open && !burgerName) {
+        msg.textContent = 'Select a burger to activate the form for.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    try {
+        const update = { is_open: open };
+        if (open) update.active_burger = burgerName;
+
+        const { error } = await supabase
+            .from('form_config')
+            .update(update)
+            .eq('id', 1);
+
+        if (error) throw error;
+
+        msg.textContent = open ? `Form opened for "${burgerName}"!` : 'Form closed.';
+        msg.className = 'form-message success';
+        loadAdminData();
+        checkFormStatus();
+    } catch (err) {
+        console.error('Form control error:', err);
+        msg.textContent = 'Failed: ' + err.message;
+        msg.className = 'form-message error';
+    }
+}
+
+async function handleGalleryUpload() {
+    const msg = document.getElementById('galleryUploadMsg');
+    const files = document.getElementById('galleryPhoto').files;
+    const restaurant = document.getElementById('galleryRestaurant').value;
+    const caption = document.getElementById('galleryCaption').value;
+
+    if (!supabase) {
+        msg.textContent = 'Supabase not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (!files.length) {
+        msg.textContent = 'Please select at least one photo.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    msg.textContent = 'Uploading...';
+    msg.className = 'form-message';
+
+    try {
+        for (const file of files) {
+            const fileName = `gallery/${Date.now()}_${file.name}`;
+            const { error: uploadError } = await supabase.storage
+                .from('photos')
+                .upload(fileName, file);
+
+            if (uploadError) throw uploadError;
+
+            const { data: urlData } = supabase.storage
+                .from('photos')
+                .getPublicUrl(fileName);
+
+            await supabase.from('gallery').insert({
+                url: urlData.publicUrl,
+                restaurant: restaurant,
+                caption: caption,
+            });
+        }
+
+        msg.textContent = `${files.length} photo(s) uploaded!`;
+        msg.className = 'form-message success';
+        document.getElementById('galleryPhoto').value = '';
+        loadGallery();
+        loadAdminData();
+    } catch (err) {
+        console.error('Gallery upload error:', err);
+        msg.textContent = 'Upload failed: ' + err.message;
+        msg.className = 'form-message error';
+    }
+}
+
+async function deletePhoto(id) {
+    if (!confirm('Delete this photo?')) return;
+
+    try {
+        const { error } = await supabase.from('gallery').delete().eq('id', id);
+        if (error) throw error;
+        loadGallery();
+        loadAdminData();
+    } catch (err) {
+        console.error('Delete photo error:', err);
+        alert('Failed to delete photo.');
+    }
+}
+
+async function handleChangePassword() {
+    const msg = document.getElementById('changePasswordMsg');
+    const newPw = document.getElementById('newAdminPassword').value;
+    const confirmPw = document.getElementById('confirmAdminPassword').value;
+
+    if (!newPw || newPw.length < 4) {
+        msg.textContent = 'Password must be at least 4 characters.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (newPw !== confirmPw) {
+        msg.textContent = 'Passwords do not match.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    const hash = await hashPassword(newPw);
+
+    if (supabase) {
+        try {
+            const { error } = await supabase
+                .from('form_config')
+                .update({ admin_hash: hash })
+                .eq('id', 1);
+
+            if (error) throw error;
+            msg.textContent = 'Password changed! The new hash has been saved to Supabase.';
+            msg.className = 'form-message success';
+        } catch (err) {
+            msg.textContent = 'Failed to save: ' + err.message;
+            msg.className = 'form-message error';
+        }
+    } else {
+        msg.textContent = `Password hash: ${hash} — Update ADMIN_PASSWORD_HASH in config.js`;
+        msg.className = 'form-message success';
+    }
+}
+
+// ============================================
+// UTILITIES
+// ============================================
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function hashPassword(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
