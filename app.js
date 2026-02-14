@@ -218,8 +218,6 @@ function filterAndSort() {
 
     filtered.sort((a, b) => {
         switch (sortBy) {
-            case 'ranking':
-                return parseFloat(a['Ranking'] || 999) - parseFloat(b['Ranking'] || 999);
             case 'rating-desc':
                 return parseFloat(b['Burger Rating'] || 0) - parseFloat(a['Burger Rating'] || 0);
             case 'rating-asc':
@@ -301,17 +299,15 @@ function initMap() {
         popupAnchor: [0, -28],
     });
 
-    const seen = new Set();
+    // Show every entry as its own pin (not deduplicated)
     burgerData.forEach(row => {
-        const name = (row['Restaurant'] || '').toLowerCase();
-        const key = name.trim();
-        if (seen.has(key) || !key) return;
-        seen.add(key);
+        const name = (row['Restaurant'] || '').toLowerCase().trim();
+        if (!name) return;
 
-        let coords = LOCATION_COORDS[key];
+        let coords = LOCATION_COORDS[name];
         if (!coords) {
             for (const [locKey, locCoords] of Object.entries(LOCATION_COORDS)) {
-                if (key.includes(locKey) || locKey.includes(key)) {
+                if (name.includes(locKey) || locKey.includes(name)) {
                     coords = locCoords;
                     break;
                 }
@@ -319,18 +315,15 @@ function initMap() {
         }
 
         if (coords) {
-            const ratings = burgerData
-                .filter(r => (r['Restaurant'] || '').toLowerCase().trim() === key)
-                .map(r => parseFloat(r['Burger Rating'] || 0));
-            const bestRating = Math.max(...ratings);
-
-            const marker = L.marker(coords, { icon: burgerIcon }).addTo(map);
+            // Offset duplicate pins slightly so they don't stack
+            const offset = (Math.random() - 0.5) * 0.001;
+            const marker = L.marker([coords[0] + offset, coords[1] + offset], { icon: burgerIcon }).addTo(map);
             marker.bindPopup(`
                 <div class="map-popup">
                     <h3>${escapeHtml(row['Restaurant'])}</h3>
-                    <div class="popup-rating">${bestRating.toFixed(2)}</div>
-                    <div class="popup-detail">${escapeHtml(row['Location'])}</div>
-                    <div class="popup-detail">${escapeHtml(row['Price'])}</div>
+                    <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
+                    <div class="popup-detail">${escapeHtml(row['Description'])}</div>
+                    <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
                 </div>
             `);
         }
