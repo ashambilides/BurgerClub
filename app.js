@@ -299,11 +299,16 @@ function initMap() {
         popupAnchor: [0, -28],
     });
 
-    // Show every entry as its own pin (not deduplicated)
+    // One pin per restaurant, popup lists all burgers from that spot
+    const grouped = {};
     burgerData.forEach(row => {
         const name = (row['Restaurant'] || '').toLowerCase().trim();
         if (!name) return;
+        if (!grouped[name]) grouped[name] = [];
+        grouped[name].push(row);
+    });
 
+    for (const [name, entries] of Object.entries(grouped)) {
         let coords = LOCATION_COORDS[name];
         if (!coords) {
             for (const [locKey, locCoords] of Object.entries(LOCATION_COORDS)) {
@@ -315,19 +320,24 @@ function initMap() {
         }
 
         if (coords) {
-            // Offset duplicate pins slightly so they don't stack
-            const offset = (Math.random() - 0.5) * 0.001;
-            const marker = L.marker([coords[0] + offset, coords[1] + offset], { icon: burgerIcon }).addTo(map);
-            marker.bindPopup(`
-                <div class="map-popup">
-                    <h3>${escapeHtml(row['Restaurant'])}</h3>
+            const burgersHtml = entries.map(row => `
+                <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
                     <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
                     <div class="popup-detail">${escapeHtml(row['Description'])}</div>
                     <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
                 </div>
-            `);
+            `).join('');
+
+            const marker = L.marker(coords, { icon: burgerIcon }).addTo(map);
+            marker.bindPopup(`
+                <div class="map-popup">
+                    <h3>${escapeHtml(entries[0]['Restaurant'])}</h3>
+                    <div class="popup-detail">${escapeHtml(entries[0]['Location'])}</div>
+                    ${burgersHtml}
+                </div>
+            `, { maxWidth: 280 });
         }
-    });
+    }
 
     const observer = new IntersectionObserver(entries => {
         entries.forEach(entry => {
