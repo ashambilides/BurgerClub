@@ -248,26 +248,26 @@ function parsePrice(priceStr) {
 // ============================================
 
 const LOCATION_COORDS = {
-    'rolo\'s': [40.7033, -73.9065],
-    'red hook tavern': [40.6740, -74.0085],
-    'the lions bar & grill': [40.7580, -73.9855],
-    'virginia\'s': [40.7224, -73.9930],
-    'raoul\'s': [40.7263, -74.0012],
-    'au cheval': [40.7223, -73.9932],
-    'au chavel': [40.7223, -73.9932],
-    'suprema provisions': [40.7505, -73.9946],
-    'peter luger': [40.7098, -73.9624],
-    'cozy royale': [40.6839, -73.9665],
-    'minetta tavern': [40.7303, -73.9995],
-    'hamburger america': [40.7267, -73.9876],
-    'gotham burger': [40.7484, -73.9880],
-    'nowon': [40.7112, -73.9516],
-    'smacking burger': [40.7484, -73.9871],
-    'fairfax': [40.7276, -73.9847],
-    'petey\'s burger': [40.7427, -73.9234],
-    'burger by day': [40.7484, -73.9880],
-    'jg melon': [40.7727, -73.9585],
-    'corner bistro': [40.7381, -74.0032],
+    'rolo\'s': [40.7020, -73.9037],              // 853 Onderdonk Ave, Ridgewood
+    'red hook tavern': [40.6780, -74.0120],       // 329 Van Brunt St, Red Hook
+    'the lions bar & grill': [40.7275, -73.9853], // 132 1st Ave, East Village
+    'virginia\'s': [40.7228, -73.9834],           // 200 E 3rd St, East Village
+    'raoul\'s': [40.7263, -74.0021],              // 180 Prince St, SoHo
+    'au cheval': [40.7179, -74.0021],             // 33 Cortlandt Alley, Tribeca
+    'au chavel': [40.7179, -74.0021],             // 33 Cortlandt Alley, Tribeca (typo alias)
+    'suprema provisions': [40.7325, -74.0037],    // 305 Bleecker St, West Village
+    'peter luger': [40.7101, -73.9631],           // 178 Broadway, Williamsburg
+    'cozy royale': [40.7169, -73.9430],           // 434 Humboldt St, Williamsburg
+    'minetta tavern': [40.7300, -74.0006],        // 113 Macdougal St, Greenwich Village
+    'hamburger america': [40.7280, -74.0023],     // 51 MacDougal St, SoHo
+    'gotham burger': [40.7199, -73.9876],         // 131 Essex St, Lower East Side
+    'nowon': [40.7254, -73.9837],                 // 507 E 6th St, East Village
+    'smacking burger': [40.7384, -74.0040],       // 51 8th Ave, West Village
+    'fairfax': [40.7343, -74.0031],               // 234 W 4th St, West Village
+    'petey\'s burger': [40.7460, -73.9531],       // 46-46 Vernon Blvd, Long Island City
+    'burger by day': [40.7184, -73.9944],         // 242 Grand St, Chinatown/LES
+    'jg melon': [40.7711, -73.9595],              // 1291 3rd Ave, Upper East Side
+    'corner bistro': [40.7381, -74.0038],         // 331 W 4th St, West Village
 };
 
 function initMap() {
@@ -576,6 +576,7 @@ function initAdminPanel() {
     document.getElementById('deactivateFormBtn').addEventListener('click', () => handleFormControl(false));
     document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
     document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
+    initAddressSearch();
 }
 
 async function handleAdminLogin() {
@@ -679,11 +680,124 @@ function populateBurgerSelect() {
     });
 }
 
+// ============================================
+// ADDRESS SEARCH (Nominatim / OpenStreetMap)
+// ============================================
+
+let selectedAddressData = null;
+
+function initAddressSearch() {
+    const searchBtn = document.getElementById('searchAddressBtn');
+    const addressInput = document.getElementById('newAddress');
+
+    searchBtn.addEventListener('click', () => searchAddress());
+    addressInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); searchAddress(); }
+    });
+}
+
+async function searchAddress() {
+    const query = document.getElementById('newAddress').value.trim();
+    const resultsDiv = document.getElementById('addressResults');
+
+    if (!query) {
+        resultsDiv.classList.remove('show');
+        return;
+    }
+
+    resultsDiv.innerHTML = '<div class="address-searching">Searching...</div>';
+    resultsDiv.classList.add('show');
+
+    try {
+        // Use Nominatim free geocoder (OpenStreetMap) — no API key needed
+        const url = `https://nominatim.openstreetmap.org/search?` +
+            `q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=5&countrycodes=us`;
+
+        const res = await fetch(url, {
+            headers: { 'Accept': 'application/json' },
+        });
+        const data = await res.json();
+
+        if (!data || data.length === 0) {
+            resultsDiv.innerHTML = '<div class="address-searching">No results found. Try a more specific address.</div>';
+            return;
+        }
+
+        resultsDiv.innerHTML = data.map((item, i) => {
+            const addr = item.address || {};
+            const mainLine = [addr.house_number, addr.road].filter(Boolean).join(' ') ||
+                             item.display_name.split(',')[0];
+            const detailLine = [addr.city || addr.town || addr.village, addr.state, addr.postcode]
+                .filter(Boolean).join(', ');
+
+            return `
+                <div class="address-result-item" data-index="${i}"
+                     data-lat="${item.lat}" data-lon="${item.lon}"
+                     data-display="${escapeHtml(item.display_name)}"
+                     data-short="${escapeHtml(detailLine || item.display_name)}">
+                    <div class="addr-main">${escapeHtml(mainLine)}</div>
+                    <div class="addr-detail">${escapeHtml(detailLine || item.display_name)}</div>
+                </div>
+            `;
+        }).join('');
+
+        // Click handler for results
+        resultsDiv.querySelectorAll('.address-result-item').forEach(item => {
+            item.addEventListener('click', () => selectAddress(item));
+        });
+    } catch (err) {
+        console.error('Address search error:', err);
+        resultsDiv.innerHTML = '<div class="address-searching">Search failed. Please try again.</div>';
+    }
+}
+
+function selectAddress(item) {
+    const lat = parseFloat(item.dataset.lat);
+    const lon = parseFloat(item.dataset.lon);
+    const display = item.dataset.display;
+    const short = item.dataset.short;
+
+    selectedAddressData = { lat, lon, display, short };
+
+    document.getElementById('newLat').value = lat;
+    document.getElementById('newLng').value = lon;
+    document.getElementById('newLocation').value = short;
+
+    const selectedDiv = document.getElementById('selectedAddress');
+    selectedDiv.innerHTML = `
+        &#x2705; <strong>${escapeHtml(display)}</strong>
+        <span class="clear-address" title="Clear selection">&times;</span>
+    `;
+    selectedDiv.style.display = 'flex';
+
+    selectedDiv.querySelector('.clear-address').addEventListener('click', () => {
+        clearAddressSelection();
+    });
+
+    document.getElementById('addressResults').classList.remove('show');
+    document.getElementById('newAddress').value = display.split(',')[0];
+}
+
+function clearAddressSelection() {
+    selectedAddressData = null;
+    document.getElementById('newLat').value = '';
+    document.getElementById('newLng').value = '';
+    document.getElementById('newLocation').value = '';
+    document.getElementById('selectedAddress').style.display = 'none';
+    document.getElementById('newAddress').value = '';
+}
+
 async function handleAddBurger() {
     const msg = document.getElementById('addBurgerMsg');
 
     if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (!selectedAddressData) {
+        msg.textContent = 'Please search and select an address for the map pin.';
         msg.className = 'form-message error';
         return;
     }
@@ -694,11 +808,11 @@ async function handleAddBurger() {
         price: document.getElementById('newPrice').value,
         location: document.getElementById('newLocation').value,
         date_of_visit: document.getElementById('newDate').value,
-        lat: parseFloat(document.getElementById('newLat').value) || null,
-        lng: parseFloat(document.getElementById('newLng').value) || null,
+        lat: selectedAddressData.lat,
+        lng: selectedAddressData.lon,
     };
 
-    if (!burger.restaurant || !burger.description || !burger.price || !burger.location) {
+    if (!burger.restaurant || !burger.description || !burger.price) {
         msg.textContent = 'Please fill in all required fields.';
         msg.className = 'form-message error';
         return;
@@ -721,6 +835,10 @@ async function handleAddBurger() {
             date_of_visit: burger.date_of_visit,
         });
 
+        // Add coords to local map so it shows up immediately
+        const key = burger.restaurant.toLowerCase().trim();
+        LOCATION_COORDS[key] = [burger.lat, burger.lng];
+
         msg.textContent = 'Burger added to the rankings!';
         msg.className = 'form-message success';
 
@@ -729,6 +847,13 @@ async function handleAddBurger() {
         opt.value = burger.restaurant;
         opt.textContent = burger.restaurant;
         select.appendChild(opt);
+
+        // Reset form
+        document.getElementById('newRestaurant').value = '';
+        document.getElementById('newDescription').value = '';
+        document.getElementById('newPrice').value = '';
+        document.getElementById('newDate').value = '';
+        clearAddressSelection();
     } catch (err) {
         console.error('Add burger error:', err);
         msg.textContent = 'Failed to add burger: ' + err.message;
