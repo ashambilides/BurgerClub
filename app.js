@@ -88,38 +88,48 @@ function initNavigation() {
 }
 
 // ============================================
-// GOOGLE SHEETS DATA
+// RANKINGS DATA (Supabase)
 // ============================================
 
 async function loadSheetData() {
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CONFIG.GOOGLE_SHEET_ID}/values/${CONFIG.SHEET_RANGE}?key=${CONFIG.GOOGLE_API_KEY}`;
+    if (!supabase) {
+        document.getElementById('sheets-table').innerHTML =
+            '<tr><td style="padding:20px;text-align:center;color:#999;">Database not connected. Check Supabase config.</td></tr>';
+        return;
+    }
+
     try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
-        const data = await response.json();
-        const values = data.values;
-        if (!values || values.length === 0) {
-            console.error('No data found.');
+        const { data, error } = await supabase
+            .from('results')
+            .select('*')
+            .order('ranking', { ascending: true });
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+            document.getElementById('sheets-table').innerHTML =
+                '<tr><td style="padding:20px;text-align:center;color:#999;">No rankings data found.</td></tr>';
             return;
         }
 
-        // Parse data into objects
-        const headers = values[0];
-        burgerData = values.slice(1).map(row => {
-            const obj = {};
-            headers.forEach((h, i) => {
-                obj[h] = row[i] || '';
-            });
-            return obj;
-        });
+        // Map Supabase column names to display names
+        burgerData = data.map(row => ({
+            'Ranking': String(row.ranking || ''),
+            'Burger Rating': String(row.burger_rating || ''),
+            'Restaurant': row.restaurant || '',
+            'Description': row.description || '',
+            'Price': row.price || '',
+            'Location': row.location || '',
+            'Date of Visit': row.date_of_visit || '',
+        }));
 
         renderTable(burgerData);
         initTableControls();
         populateBurgerSelect();
     } catch (error) {
-        console.error('Error fetching sheet data:', error);
+        console.error('Error fetching data:', error);
         document.getElementById('sheets-table').innerHTML =
-            '<tr><td style="padding:20px;text-align:center;color:#999;">Failed to load data. Check your API key and Sheet ID in config.js.</td></tr>';
+            '<tr><td style="padding:20px;text-align:center;color:#999;">Failed to load rankings. Please try again later.</td></tr>';
     }
 }
 
@@ -715,7 +725,27 @@ async function handleAddBurger() {
     try {
         const { error } = await supabase.from('burgers').insert(burger);
         if (error) throw error;
-        msg.textContent = 'Burger added! Note: Rankings in Google Sheets must be updated manually.';
+
+        // Also add to results table (ranking will be updated after ratings come in)
+        const { data: maxRank } = await supabase
+            .from('results')
+            .select('ranking')
+            .order('ranking', { ascending: false })
+            .limit(1)
+            .single();
+        const nextRanking = (maxRank ? maxRank.ranking : 0) + 1;
+
+        await supabase.from('results').insert({
+            ranking: nextRanking,
+            burger_rating: null,
+            restaurant: burger.restaurant,
+            description: burger.description,
+            price: burger.price,
+            location: burger.location,
+            date_of_visit: burger.date_of_visit,
+        });
+
+        msg.textContent = 'Burger added to the rankings!';
         msg.className = 'form-message success';
 
         // Add to the burger select dropdown

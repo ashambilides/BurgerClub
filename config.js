@@ -4,11 +4,6 @@
 // ============================================
 
 const CONFIG = {
-    // Google Sheets (public read via API key)
-    GOOGLE_API_KEY: 'AIzaSyB1UNbvuVz2r-1Zn70TC-fKJR3lgamrLr4',
-    GOOGLE_SHEET_ID: '1iiOTJWHlPz-qVDWTzgstnfCC1YQgy52CrdF3dSHQg0Y',
-    SHEET_RANGE: 'Results!A1:G',
-
     // Supabase (free tier)
     // 1. Go to https://supabase.com and create a free project
     // 2. Go to Settings > API and copy the URL and anon key
