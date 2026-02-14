@@ -247,27 +247,27 @@ function parsePrice(priceStr) {
 // MAP (Leaflet.js)
 // ============================================
 
-const LOCATION_COORDS = {
-    'rolo\'s': [40.7020, -73.9037],              // 853 Onderdonk Ave, Ridgewood
-    'red hook tavern': [40.6780, -74.0120],       // 329 Van Brunt St, Red Hook
-    'the lions bar & grill': [40.7275, -73.9853], // 132 1st Ave, East Village
-    'virginia\'s': [40.7228, -73.9834],           // 200 E 3rd St, East Village
-    'raoul\'s': [40.7263, -74.0021],              // 180 Prince St, SoHo
-    'au cheval': [40.7179, -74.0021],             // 33 Cortlandt Alley, Tribeca
-    'au chavel': [40.7179, -74.0021],             // 33 Cortlandt Alley, Tribeca (typo alias)
-    'suprema provisions': [40.7325, -74.0037],    // 305 Bleecker St, West Village
-    'peter luger': [40.7101, -73.9631],           // 178 Broadway, Williamsburg
-    'cozy royale': [40.7169, -73.9430],           // 434 Humboldt St, Williamsburg
-    'minetta tavern': [40.7300, -74.0006],        // 113 Macdougal St, Greenwich Village
-    'hamburger america': [40.7280, -74.0023],     // 51 MacDougal St, SoHo
-    'gotham burger': [40.7199, -73.9876],         // 131 Essex St, Lower East Side
-    'nowon': [40.7254, -73.9837],                 // 507 E 6th St, East Village
-    'smacking burger': [40.7384, -74.0040],       // 51 8th Ave, West Village
-    'fairfax': [40.7343, -74.0031],               // 234 W 4th St, West Village
-    'petey\'s burger': [40.7460, -73.9531],       // 46-46 Vernon Blvd, Long Island City
-    'burger by day': [40.7184, -73.9944],         // 242 Grand St, Chinatown/LES
-    'jg melon': [40.7711, -73.9595],              // 1291 3rd Ave, Upper East Side
-    'corner bistro': [40.7381, -74.0038],         // 331 W 4th St, West Village
+// Keyed by normalized address from the Location field in the data
+const ADDRESS_COORDS = {
+    '8-53 onderdonk ave, ridgewood, ny 11385':       [40.7020, -73.9037],
+    '329 van brunt st, brooklyn, ny 11231':           [40.6780, -74.0120],
+    '132 1st ave., new york, ny 10009':               [40.7275, -73.9853],
+    'east 3rd st, new york, ny 10009':                [40.7228, -73.9834],
+    '180 prince st, new york, ny 10012':              [40.7263, -74.0021],
+    '33 cortlandt alley, new york, ny 10013':         [40.7179, -74.0021],
+    '305 bleecker st, new york, ny 10014':            [40.7325, -74.0037],
+    '178 broadway, brooklyn, ny 11211':               [40.7101, -73.9631],
+    '434 humboldt st, brooklyn, ny 11211':            [40.7169, -73.9430],
+    '113 macdougal st, new york, ny 10012':           [40.7300, -74.0006],
+    '155 w houston st, new york, ny 10012':           [40.7279, -74.0009],
+    '131 essex street, new york, ny 10002':           [40.7199, -73.9876],
+    '436 jefferson st, brooklyn, ny 11237':           [40.7037, -73.9226],
+    '51-63 8th ave, new york, ny 10014':              [40.7384, -74.0040],
+    '234 west 4th street, new york, ny 10014':        [40.7343, -74.0031],
+    '46-46 vernon blvd, long island city, ny 11101':  [40.7460, -73.9531],
+    '242 grand street, manhattan, ny 10012':          [40.7184, -73.9944],
+    '1291 3rd ave, new york, ny 10021':               [40.7711, -73.9595],
+    '331 w 4th st, new york, ny 10014':               [40.7381, -74.0038],
 };
 
 function initMap() {
@@ -299,21 +299,22 @@ function initMap() {
         popupAnchor: [0, -28],
     });
 
-    // One pin per restaurant, popup lists all burgers from that spot
+    // One pin per address, popup lists all burgers at that location
     const grouped = {};
     burgerData.forEach(row => {
-        const name = (row['Restaurant'] || '').toLowerCase().trim();
-        if (!name) return;
-        if (!grouped[name]) grouped[name] = [];
-        grouped[name].push(row);
+        const addr = (row['Location'] || '').toLowerCase().trim();
+        if (!addr) return;
+        if (!grouped[addr]) grouped[addr] = [];
+        grouped[addr].push(row);
     });
 
-    for (const [name, entries] of Object.entries(grouped)) {
-        let coords = LOCATION_COORDS[name];
+    for (const [addr, entries] of Object.entries(grouped)) {
+        let coords = ADDRESS_COORDS[addr];
+        // Fuzzy fallback: try partial match
         if (!coords) {
-            for (const [locKey, locCoords] of Object.entries(LOCATION_COORDS)) {
-                if (name.includes(locKey) || locKey.includes(name)) {
-                    coords = locCoords;
+            for (const [addrKey, addrCoords] of Object.entries(ADDRESS_COORDS)) {
+                if (addr.includes(addrKey) || addrKey.includes(addr)) {
+                    coords = addrCoords;
                     break;
                 }
             }
@@ -323,6 +324,7 @@ function initMap() {
             const burgersHtml = entries.map(row => `
                 <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
                     <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
+                    <div><strong>${escapeHtml(row['Restaurant'])}</strong></div>
                     <div class="popup-detail">${escapeHtml(row['Description'])}</div>
                     <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
                 </div>
@@ -332,7 +334,7 @@ function initMap() {
             marker.bindPopup(`
                 <div class="map-popup">
                     <h3>${escapeHtml(entries[0]['Restaurant'])}</h3>
-                    <div class="popup-detail">${escapeHtml(entries[0]['Location'])}</div>
+                    <div class="popup-detail" style="margin-bottom:8px;">${escapeHtml(entries[0]['Location'])}</div>
                     ${burgersHtml}
                 </div>
             `, { maxWidth: 280 });
@@ -670,13 +672,27 @@ async function loadAdminData() {
 }
 
 function populateBurgerSelect() {
-    const select = document.getElementById('activateBurgerSelect');
-    const unique = [...new Set(burgerData.map(r => r['Restaurant']))].filter(Boolean);
-    unique.forEach(name => {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        select.appendChild(opt);
+    // Populate all selects that need a per-burger dropdown
+    const formSelect = document.getElementById('activateBurgerSelect');
+    const gallerySelect = document.getElementById('galleryBurgerSelect');
+
+    const selects = [formSelect, gallerySelect].filter(Boolean);
+
+    burgerData.forEach(row => {
+        const restaurant = row['Restaurant'] || '';
+        const desc = row['Description'] || '';
+        // Truncate description for readability
+        const shortDesc = desc.length > 50 ? desc.substring(0, 50) + '...' : desc;
+        const label = `${restaurant} — ${shortDesc}`;
+        // Value is "Restaurant ||| Description" so we can identify uniquely
+        const value = `${restaurant} ||| ${desc}`;
+
+        selects.forEach(select => {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = label;
+            select.appendChild(opt);
+        });
     });
 }
 
@@ -685,6 +701,7 @@ function populateBurgerSelect() {
 // ============================================
 
 let selectedAddressData = null;
+let addressSearchTimer = null;
 
 function initAddressSearch() {
     const searchBtn = document.getElementById('searchAddressBtn');
@@ -693,6 +710,17 @@ function initAddressSearch() {
     searchBtn.addEventListener('click', () => searchAddress());
     addressInput.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); searchAddress(); }
+    });
+
+    // Auto-suggest as you type (debounced 400ms)
+    addressInput.addEventListener('input', () => {
+        clearTimeout(addressSearchTimer);
+        const val = addressInput.value.trim();
+        if (val.length >= 3) {
+            addressSearchTimer = setTimeout(() => searchAddress(), 400);
+        } else {
+            document.getElementById('addressResults').classList.remove('show');
+        }
     });
 }
 
@@ -836,17 +864,25 @@ async function handleAddBurger() {
         });
 
         // Add coords to local map so it shows up immediately
-        const key = burger.restaurant.toLowerCase().trim();
-        LOCATION_COORDS[key] = [burger.lat, burger.lng];
+        const addrKey = burger.location.toLowerCase().trim();
+        ADDRESS_COORDS[addrKey] = [burger.lat, burger.lng];
 
         msg.textContent = 'Burger added to the rankings!';
         msg.className = 'form-message success';
 
-        const select = document.getElementById('activateBurgerSelect');
-        const opt = document.createElement('option');
-        opt.value = burger.restaurant;
-        opt.textContent = burger.restaurant;
-        select.appendChild(opt);
+        // Add to both dropdowns
+        const value = `${burger.restaurant} ||| ${burger.description}`;
+        const shortDesc = burger.description.length > 50
+            ? burger.description.substring(0, 50) + '...' : burger.description;
+        const label = `${burger.restaurant} — ${shortDesc}`;
+
+        [document.getElementById('activateBurgerSelect'),
+         document.getElementById('galleryBurgerSelect')].filter(Boolean).forEach(select => {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = label;
+            select.appendChild(opt);
+        });
 
         // Reset form
         document.getElementById('newRestaurant').value = '';
@@ -870,20 +906,24 @@ async function handleFormControl(open) {
         return;
     }
 
-    const burgerName = document.getElementById('activateBurgerSelect').value;
-    if (open && !burgerName) {
+    const burgerValue = document.getElementById('activateBurgerSelect').value;
+    if (open && !burgerValue) {
         msg.textContent = 'Select a burger to activate the form for.';
         msg.className = 'form-message error';
         return;
     }
 
+    // Parse "Restaurant ||| Description" format
+    const [burgerRestaurant, burgerDesc] = burgerValue.split(' ||| ');
+    const burgerLabel = burgerRestaurant + (burgerDesc ? ' — ' + (burgerDesc.length > 60 ? burgerDesc.substring(0, 60) + '...' : burgerDesc) : '');
+
     try {
         const update = { is_open: open };
-        if (open) update.active_burger = burgerName;
+        if (open) update.active_burger = burgerLabel;
 
         await dbUpdate('form_config', update, 'id', 1);
 
-        msg.textContent = open ? `Form opened for "${burgerName}"!` : 'Form closed.';
+        msg.textContent = open ? `Form opened for "${burgerLabel}"!` : 'Form closed.';
         msg.className = 'form-message success';
         loadAdminData();
         checkFormStatus();
@@ -897,11 +937,20 @@ async function handleFormControl(open) {
 async function handleGalleryUpload() {
     const msg = document.getElementById('galleryUploadMsg');
     const files = document.getElementById('galleryPhoto').files;
-    const restaurant = document.getElementById('galleryRestaurant').value;
+    const burgerValue = document.getElementById('galleryBurgerSelect').value;
     const caption = document.getElementById('galleryCaption').value;
+
+    // Parse "Restaurant ||| Description"
+    const [restaurant, burgerDesc] = burgerValue ? burgerValue.split(' ||| ') : ['', ''];
 
     if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (!burgerValue) {
+        msg.textContent = 'Please select which burger this photo is for.';
         msg.className = 'form-message error';
         return;
     }
@@ -922,8 +971,8 @@ async function handleGalleryUpload() {
 
             await dbInsert('gallery', {
                 url: publicUrl,
-                restaurant: restaurant,
-                caption: caption,
+                restaurant: restaurant || '',
+                caption: caption || (burgerDesc ? burgerDesc.substring(0, 80) : ''),
             });
         }
 

@@ -227,8 +227,10 @@
                 <div class="admin-tab-content" id="tab-manageGallery">
                     <h3>Upload Photos to Gallery</h3>
                     <div class="form-group">
-                        <label for="galleryRestaurant">Restaurant Name</label>
-                        <input type="text" id="galleryRestaurant" placeholder="Which burger spot?">
+                        <label for="galleryBurgerSelect">Select Burger</label>
+                        <select id="galleryBurgerSelect" class="sort-select">
+                            <option value="">-- Select a burger --</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="galleryCaption">Caption</label>
@@ -278,7 +280,7 @@
     </footer>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.js?v=5"></script>
-    <script src="app.js?v=5"></script>
+    <script src="config.js?v=6"></script>
+    <script src="app.js?v=6"></script>
 </body>
 </html>
