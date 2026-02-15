@@ -88,6 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load secondary features in background
     loadGallery().catch(e => console.error('Gallery load failed:', e));
     checkFormStatus().catch(e => console.error('Form status check failed:', e));
+    initSuggestionForm();
 });
 
 // ============================================
@@ -802,6 +803,9 @@ async function loadAdminData() {
     } catch (e) {
         console.error('Load burger list error:', e);
     }
+
+    // Load suggestions
+    loadSuggestions();
 }
 
 function populateBurgerSelect() {
@@ -1205,6 +1209,111 @@ async function handleChangePassword() {
     } else {
         msg.textContent = `Password hash: ${hash} — Update ADMIN_PASSWORD_HASH in config.js`;
         msg.className = 'form-message success';
+    }
+}
+
+// ============================================
+// SUGGESTIONS
+// ============================================
+
+function initSuggestionForm() {
+    const form = document.getElementById('suggestionForm');
+    if (!form) return;
+    form.addEventListener('submit', handleSuggestionSubmit);
+}
+
+async function handleSuggestionSubmit(e) {
+    e.preventDefault();
+    const msg = document.getElementById('suggestMessage');
+    const btn = document.getElementById('suggestBtn');
+    const name = document.getElementById('suggestName').value.trim();
+    const text = document.getElementById('suggestText').value.trim();
+
+    if (!name || !text) {
+        msg.textContent = 'Please fill in both fields.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (!isConfigured()) {
+        msg.textContent = 'Database not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    btn.disabled = true;
+    msg.textContent = 'Submitting...';
+    msg.className = 'form-message';
+
+    try {
+        await dbInsert('suggestions', {
+            name: name,
+            suggestion: text,
+        });
+        msg.textContent = 'Thanks for the suggestion!';
+        msg.className = 'form-message success';
+        document.getElementById('suggestName').value = '';
+        document.getElementById('suggestText').value = '';
+    } catch (err) {
+        console.error('Suggestion submit error:', err);
+        msg.textContent = 'Failed to submit. Please try again.';
+        msg.className = 'form-message error';
+    }
+    btn.disabled = false;
+}
+
+async function loadSuggestions() {
+    const listDiv = document.getElementById('adminSuggestionsList');
+    if (!listDiv) return;
+
+    try {
+        const data = await dbSelect('suggestions', 'select=*&order=created_at.desc');
+
+        if (!data || data.length === 0) {
+            listDiv.innerHTML = '<p style="color:#999;">No suggestions yet.</p>';
+            return;
+        }
+
+        listDiv.innerHTML = data.map(s => {
+            const created = new Date(s.created_at).toLocaleString();
+            const addressedHtml = s.addressed
+                ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
+                : '';
+            return `
+                <div class="suggestion-entry ${s.addressed ? 'addressed' : ''}">
+                    <div class="suggestion-check">
+                        <input type="checkbox" ${s.addressed ? 'checked' : ''}
+                            onchange="toggleSuggestion(${s.id}, this.checked)"
+                            title="${s.addressed ? 'Mark as unaddressed' : 'Mark as addressed'}">
+                    </div>
+                    <div class="suggestion-content">
+                        <div class="suggestion-header">
+                            <strong>${escapeHtml(s.name)}</strong>
+                            <span class="suggestion-date">${created}</span>
+                        </div>
+                        <div class="suggestion-text">${escapeHtml(s.suggestion)}</div>
+                        ${addressedHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('Load suggestions error:', err);
+        listDiv.innerHTML = '<p style="color:#999;">Could not load suggestions.</p>';
+    }
+}
+
+async function toggleSuggestion(id, addressed) {
+    try {
+        const update = {
+            addressed: addressed,
+            addressed_at: addressed ? new Date().toISOString() : null,
+        };
+        await dbUpdate('suggestions', update, 'id', id);
+        loadSuggestions();
+    } catch (err) {
+        console.error('Toggle suggestion error:', err);
+        alert('Failed to update suggestion.');
     }
 }
 
