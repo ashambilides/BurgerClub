@@ -286,6 +286,11 @@ async function loadAttendeesData() {
         // Clear existing data
         attendeesData = {};
 
+        // Initialize all burgers with empty arrays
+        burgerData.forEach(row => {
+            attendeesData[row['Ranking']] = [];
+        });
+
         // Build map: burger label -> ranking
         const burgerToRanking = {};
         burgerData.forEach(row => {
@@ -297,20 +302,45 @@ async function loadAttendeesData() {
         attendees.forEach(att => {
             const ranking = att.burger_id;
             if (!attendeesData[ranking]) attendeesData[ranking] = [];
-            attendeesData[ranking].push(att.name);
+            if (!attendeesData[ranking].includes(att.name)) {
+                attendeesData[ranking].push(att.name);
+            }
         });
 
         // Add names from ratings (auto-populate for new submissions)
         ratings.forEach(r => {
             const burgerLabel = r.burger;
             const ranking = burgerToRanking[burgerLabel];
-            if (!ranking) return;
+            if (!ranking) {
+                console.warn(`Rating found for unknown burger: "${burgerLabel}"`);
+                return;
+            }
 
             if (!attendeesData[ranking]) attendeesData[ranking] = [];
 
             // Only add if not already in attendees list
             if (!attendeesData[ranking].includes(r.name)) {
                 attendeesData[ranking].push(r.name);
+            }
+        });
+
+        // For historical burgers with ratings but no explicit attendees, count unique raters
+        // This ensures historical entries show proper attendee counts
+        burgerData.forEach(row => {
+            const ranking = row['Ranking'];
+            const label = `${row['Restaurant']} — ${row['Description']}`;
+
+            // Count ratings for this burger
+            const burgerRatings = ratings.filter(r => r.burger === label);
+
+            // If we have ratings but no attendees, this is likely a historical burger
+            // Add the raters with "Unknown" placeholder if needed
+            if (burgerRatings.length > 0 && attendeesData[ranking].length === 0) {
+                burgerRatings.forEach(r => {
+                    if (r.name && !attendeesData[ranking].includes(r.name)) {
+                        attendeesData[ranking].push(r.name);
+                    }
+                });
             }
         });
 
