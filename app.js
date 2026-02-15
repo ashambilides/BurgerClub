@@ -17,6 +17,7 @@ const API_BASE = CONFIG.SUPABASE_URL + '/rest/v1';
 const STORAGE_BASE = CONFIG.SUPABASE_URL + '/storage/v1';
 const API_HEADERS = {
     'apikey': CONFIG.SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
     'Content-Type': 'application/json',
 };
 
@@ -167,6 +168,8 @@ async function loadRankings() {
             'Price': row.price || '',
             'Location': row.location || '',
             'Date of Visit': row.date_of_visit || '',
+            'lat': row.lat || null,
+            'lng': row.lng || null,
         }));
 
         renderTable(burgerData);
@@ -287,65 +290,7 @@ function initMap() {
         maxZoom: 18,
     }).addTo(map);
 
-    const burgerIcon = L.divIcon({
-        className: 'custom-marker',
-        html: `<div style="
-            background: #d32f2f;
-            width: 28px;
-            height: 28px;
-            border-radius: 50% 50% 50% 0;
-            transform: rotate(-45deg);
-            border: 3px solid white;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        "><span style="transform:rotate(45deg);font-size:12px;">&#127828;</span></div>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 28],
-        popupAnchor: [0, -28],
-    });
-
-    // One pin per address, popup lists all burgers at that location
-    const grouped = {};
-    burgerData.forEach(row => {
-        const addr = (row['Location'] || '').toLowerCase().trim();
-        if (!addr) return;
-        if (!grouped[addr]) grouped[addr] = [];
-        grouped[addr].push(row);
-    });
-
-    for (const [addr, entries] of Object.entries(grouped)) {
-        let coords = ADDRESS_COORDS[addr];
-        // Fuzzy fallback: try partial match
-        if (!coords) {
-            for (const [addrKey, addrCoords] of Object.entries(ADDRESS_COORDS)) {
-                if (addr.includes(addrKey) || addrKey.includes(addr)) {
-                    coords = addrCoords;
-                    break;
-                }
-            }
-        }
-
-        if (coords) {
-            const burgersHtml = entries.map(row => `
-                <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
-                    <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
-                    <div class="popup-detail">${escapeHtml(row['Description'])}</div>
-                    <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
-                </div>
-            `).join('');
-
-            const marker = L.marker(coords, { icon: burgerIcon }).addTo(map);
-            marker.bindPopup(`
-                <div class="map-popup">
-                    <h3>${escapeHtml(entries[0]['Restaurant'])}</h3>
-                    <div class="popup-detail" style="margin-bottom:8px;">${escapeHtml(entries[0]['Location'])}</div>
-                    ${burgersHtml}
-                </div>
-            `, { maxWidth: 280 });
-        }
-    }
+    addMarkersToMap();
 
     const observer = new IntersectionObserver(entries => {
         entries.forEach(entry => {
@@ -361,7 +306,10 @@ function rebuildMap() {
     map.eachLayer(layer => {
         if (layer instanceof L.Marker) map.removeLayer(layer);
     });
-    // Re-add markers from current burgerData
+    addMarkersToMap();
+}
+
+function addMarkersToMap() {
     const burgerIcon = L.divIcon({
         className: 'custom-marker',
         html: `<div style="
@@ -381,16 +329,34 @@ function rebuildMap() {
         popupAnchor: [0, -28],
     });
 
+    // Group by location address for shared pins
     const grouped = {};
     burgerData.forEach(row => {
         const addr = (row['Location'] || '').toLowerCase().trim();
         if (!addr) return;
-        if (!grouped[addr]) grouped[addr] = [];
-        grouped[addr].push(row);
+        if (!grouped[addr]) grouped[addr] = { entries: [], lat: null, lng: null };
+        grouped[addr].entries.push(row);
+        // Use lat/lng from database if available (prefer first one found)
+        if (!grouped[addr].lat && row.lat && row.lng) {
+            grouped[addr].lat = parseFloat(row.lat);
+            grouped[addr].lng = parseFloat(row.lng);
+        }
     });
 
-    for (const [addr, entries] of Object.entries(grouped)) {
-        let coords = ADDRESS_COORDS[addr];
+    for (const [addr, group] of Object.entries(grouped)) {
+        let coords = null;
+
+        // Priority 1: lat/lng from database
+        if (group.lat && group.lng) {
+            coords = [group.lat, group.lng];
+        }
+
+        // Priority 2: hardcoded ADDRESS_COORDS (for old entries without lat/lng)
+        if (!coords) {
+            coords = ADDRESS_COORDS[addr];
+        }
+
+        // Priority 3: fuzzy match on ADDRESS_COORDS
         if (!coords) {
             for (const [addrKey, addrCoords] of Object.entries(ADDRESS_COORDS)) {
                 if (addr.includes(addrKey) || addrKey.includes(addr)) {
@@ -399,7 +365,9 @@ function rebuildMap() {
                 }
             }
         }
+
         if (coords) {
+            const entries = group.entries;
             const burgersHtml = entries.map(row => `
                 <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
                     <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
@@ -1138,6 +1106,8 @@ async function handleAddBurger() {
             price: burger.price,
             location: burger.location,
             date_of_visit: burger.date_of_visit,
+            lat: burger.lat,
+            lng: burger.lng,
         });
 
         // Add coords so map can find the new address
