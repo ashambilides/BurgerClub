@@ -277,6 +277,34 @@ async function loadAttendeesData() {
     if (!isConfigured()) return;
 
     try {
+        // Historical submission counts from original Google Sheet
+        // Maps ranking -> number of original form submissions
+        const historicalCounts = {
+            1: 0,  // Rolo's - not in original sheet
+            2: 7,  // Red Hook Tavern
+            3: 6,  // The Lions Bar & Grill
+            4: 7,  // Virginia's
+            5: 8,  // Raoul's
+            6: 7,  // Au Cheval
+            7: 7,  // Suprema Provisions
+            8: 7,  // Peter Luger
+            9: 6,  // Cozy Royale (regular)
+            10: 7, // Minetta Tavern BLACK LABEL
+            11: 6, // Cozy Royale Dry-Aged
+            12: 5, // Hamburger America CLASSIC SMASH
+            13: 7, // Minetta Tavern MINETTA
+            14: 10, // Gotham Burger
+            15: 5, // Hamburger America FRIED ONION
+            16: 4, // Nowon LEGENDARY
+            17: 7, // Smacking Burger
+            18: 4, // Fairfax
+            19: 4, // Nowon DRY AGED
+            20: 8, // Petey's Burger
+            21: 7, // Burger by Day
+            22: 9, // JG Melon
+            23: 5, // Corner Bistro
+        };
+
         // Load attendees table
         const attendees = await dbSelect('attendees', 'select=*');
 
@@ -326,44 +354,56 @@ async function loadAttendeesData() {
             }
         });
 
-        // For historical burgers: Add "Unknown" placeholders if they have a rating but no attendees
+        // For historical burgers: Add "Unknown" placeholders based on original submission counts
         // Save these to the database so they can be edited later
         for (const row of burgerData) {
-            const ranking = row['Ranking'];
+            const ranking = parseInt(row['Ranking']);
             const burgerRating = row['Burger Rating'];
-            const count = attendeesData[ranking]?.length || 0;
+            const currentCount = attendeesData[ranking]?.length || 0;
+            const historicalCount = historicalCounts[ranking] || 0;
 
-            // If burger has a rating score but zero attendees, it's historical data
-            // Add 4 "Unknown" placeholders (user can edit these in Admin)
-            if (burgerRating && burgerRating !== '' && count === 0) {
-                // Check if Unknown placeholders already exist in DB for this burger
-                const existingUnknowns = attendees.filter(a =>
-                    a.burger_id == ranking && a.name.startsWith('Unknown ')
-                );
+            // Skip if no historical data for this burger
+            if (historicalCount === 0) continue;
 
-                // Only create if they don't exist yet
-                if (existingUnknowns.length === 0) {
-                    // Create Unknown placeholders in database
-                    for (let i = 1; i <= 4; i++) {
-                        const unknownName = `Unknown ${i}`;
-                        try {
-                            await dbInsert('attendees', {
-                                burger_id: parseInt(ranking),
-                                name: unknownName,
-                                rating_id: null,
-                            });
-                            attendeesData[ranking].push(unknownName);
-                        } catch (insertErr) {
-                            console.error(`Failed to create ${unknownName} for burger ${ranking}:`, insertErr);
+            // If burger has a rating score, add Unknown placeholders
+            if (burgerRating && burgerRating !== '') {
+                // Calculate how many Unknowns we need
+                // If user already added names (e.g., "Angelo"), create (historicalCount - currentCount) Unknowns
+                const unknownsNeeded = Math.max(0, historicalCount - currentCount);
+
+                if (unknownsNeeded > 0) {
+                    // Check if Unknown placeholders already exist in DB for this burger
+                    const existingUnknowns = attendees.filter(a =>
+                        a.burger_id == ranking && a.name.startsWith('Unknown ')
+                    );
+
+                    // Only create new Unknowns if we don't have enough
+                    const existingUnknownCount = existingUnknowns.length;
+                    const toCreate = unknownsNeeded - existingUnknownCount;
+
+                    if (toCreate > 0) {
+                        // Create Unknown placeholders in database
+                        for (let i = 1; i <= toCreate; i++) {
+                            const unknownName = `Unknown ${i}`;
+                            try {
+                                await dbInsert('attendees', {
+                                    burger_id: ranking,
+                                    name: unknownName,
+                                    rating_id: null,
+                                });
+                                attendeesData[ranking].push(unknownName);
+                            } catch (insertErr) {
+                                console.error(`Failed to create ${unknownName} for burger ${ranking}:`, insertErr);
+                            }
                         }
+                    } else {
+                        // Add existing unknowns to attendeesData
+                        existingUnknowns.forEach(u => {
+                            if (!attendeesData[ranking].includes(u.name)) {
+                                attendeesData[ranking].push(u.name);
+                            }
+                        });
                     }
-                } else {
-                    // Add existing unknowns to attendeesData
-                    existingUnknowns.forEach(u => {
-                        if (!attendeesData[ranking].includes(u.name)) {
-                            attendeesData[ranking].push(u.name);
-                        }
-                    });
                 }
             }
         }
