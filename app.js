@@ -428,7 +428,17 @@ function showAttendees(ranking) {
     if (attendees.length === 0) {
         list.innerHTML = '<p style="color:#999;text-align:center;">No attendees recorded yet.</p>';
     } else {
-        list.innerHTML = attendees.map(name => `
+        // Sort attendees alphabetically (Unknown names at the end)
+        const sorted = [...attendees].sort((a, b) => {
+            const aIsUnknown = a.startsWith('Unknown ');
+            const bIsUnknown = b.startsWith('Unknown ');
+
+            if (aIsUnknown && !bIsUnknown) return 1;  // Unknown goes after real names
+            if (!aIsUnknown && bIsUnknown) return -1; // Real names go before Unknown
+            return a.localeCompare(b); // Alphabetical within each group
+        });
+
+        list.innerHTML = sorted.map(name => `
             <div class="attendee-item">${escapeHtml(name)}</div>
         `).join('');
     }
@@ -2189,11 +2199,14 @@ function compareAttendance() {
 // MAIN PAGE ATTENDANCE TRACKER
 // ============================================
 
+let trackerMemberCount = 2;
+let trackerAvailableNames = [];
+
 async function loadMainAttendanceTracker() {
     const individualSelect = document.getElementById('mainTrackerMemberSelect');
-    const memberSelects = document.querySelectorAll('.tracker-member-select');
+    const container = document.getElementById('mainTrackerMemberSelectors');
 
-    if (!individualSelect) return;
+    if (!individualSelect || !container) return;
 
     await loadAttendeesData();
 
@@ -2208,22 +2221,53 @@ async function loadMainAttendanceTracker() {
         });
     });
 
-    const sorted = Array.from(allNames).sort();
+    trackerAvailableNames = Array.from(allNames).sort();
 
     // Populate individual member select
     individualSelect.innerHTML = '<option value="">-- Select a member --</option>' +
-        sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+        trackerAvailableNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
 
-    // Populate all comparison selects
-    memberSelects.forEach((sel, index) => {
-        const placeholder = index < 2 ? `-- Member ${index + 1} --` : `-- Member ${index + 1} (optional) --`;
-        sel.innerHTML = `<option value="">${placeholder}</option>` +
-            sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-    });
+    // Initialize with 2 member selects
+    trackerMemberCount = 2;
+    renderTrackerSelects();
 
     // Event listeners
     individualSelect.addEventListener('change', showMainIndividualAttendance);
     document.getElementById('mainTrackerCompareBtn')?.addEventListener('click', compareMainAttendance);
+    document.getElementById('addMemberBtn')?.addEventListener('click', addTrackerMember);
+    document.getElementById('clearMembersBtn')?.addEventListener('click', clearTrackerMembers);
+}
+
+function renderTrackerSelects() {
+    const container = document.getElementById('mainTrackerMemberSelectors');
+    if (!container) return;
+
+    container.innerHTML = '';
+    for (let i = 0; i < trackerMemberCount; i++) {
+        const select = document.createElement('select');
+        select.className = 'tracker-member-select sort-select';
+        select.style.width = '100%';
+        select.style.maxWidth = '400px';
+        select.dataset.index = i;
+        select.innerHTML = `<option value="">-- Member ${i + 1} --</option>` +
+            trackerAvailableNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+        container.appendChild(select);
+    }
+}
+
+function addTrackerMember() {
+    if (trackerMemberCount >= trackerAvailableNames.length) {
+        alert(`Maximum ${trackerAvailableNames.length} members available.`);
+        return;
+    }
+    trackerMemberCount++;
+    renderTrackerSelects();
+}
+
+function clearTrackerMembers() {
+    trackerMemberCount = 2;
+    renderTrackerSelects();
+    document.getElementById('mainTrackerComparisonResults').innerHTML = '';
 }
 
 function showMainIndividualAttendance() {

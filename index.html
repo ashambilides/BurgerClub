@@ -247,7 +247,6 @@
                     <button class="admin-tab" data-tab="manageForm">Form Control</button>
                     <button class="admin-tab" data-tab="manageGallery">Gallery</button>
                     <button class="admin-tab" data-tab="manageAttendees">Attendees</button>
-                    <button class="admin-tab" data-tab="attendanceTracker">Attendance Tracker</button>
                     <button class="admin-tab" data-tab="manageRequests">Requests</button>
                     <button class="admin-tab" data-tab="manageSuggestions">Suggestions</button>
                     <button class="admin-tab" data-tab="manageSettings">Settings</button>
@@ -368,34 +367,6 @@
                     <div id="adminAttendeesManager">
                         <p style="color:#999;">Loading...</p>
                     </div>
-                </div>
-
-                <!-- Attendance Tracker Tab -->
-                <div class="admin-tab-content" id="tab-attendanceTracker">
-                    <h3>Attendance Tracker</h3>
-                    <p style="color:#666;margin-bottom:16px;">See who attended which burgers and compare member attendance.</p>
-
-                    <div class="form-group">
-                        <label>View Individual Member</label>
-                        <select id="trackerMemberSelect" class="sort-select">
-                            <option value="">-- Select a member --</option>
-                        </select>
-                    </div>
-                    <div id="trackerIndividualResults" style="margin-bottom:30px;"></div>
-
-                    <div class="form-group">
-                        <label>Compare Two Members</label>
-                        <div style="display:flex;gap:12px;">
-                            <select id="trackerMember1" class="sort-select" style="flex:1;">
-                                <option value="">-- Member 1 --</option>
-                            </select>
-                            <select id="trackerMember2" class="sort-select" style="flex:1;">
-                                <option value="">-- Member 2 --</option>
-                            </select>
-                        </div>
-                        <button class="btn btn-primary" id="trackerCompareBtn" style="margin-top:10px;">Compare</button>
-                    </div>
-                    <div id="trackerComparisonResults"></div>
                 </div>
 
                 <!-- Settings Tab -->
