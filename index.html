@@ -79,48 +79,6 @@
         </div>
     </section>
 
-    <!-- Attendance Tracker Section -->
-    <section id="tracker" class="section">
-        <h2 class="section-title">Attendance Tracker</h2>
-        <p class="section-desc">See who attended which burgers and compare member attendance.</p>
-
-        <div class="content-container" style="max-width:1100px;margin:0 auto;">
-            <!-- Individual Member View -->
-            <div class="form-group" style="margin-bottom:30px;">
-                <label style="display:block;margin-bottom:8px;font-weight:500;">View Individual Member</label>
-                <select id="mainTrackerMemberSelect" class="sort-select" style="max-width:400px;">
-                    <option value="">-- Select a member --</option>
-                </select>
-                <div id="mainTrackerIndividualResults" style="margin-top:12px;"></div>
-            </div>
-
-            <!-- Multi-Member Comparison -->
-            <div class="form-group">
-                <label style="display:block;margin-bottom:8px;font-weight:500;">Compare Multiple Members</label>
-                <p style="color:#666;font-size:0.9em;margin-bottom:12px;">Select 2-5 members to compare their attendance.</p>
-                <div id="mainTrackerMemberSelectors" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px;">
-                    <select class="tracker-member-select sort-select" data-index="0">
-                        <option value="">-- Member 1 --</option>
-                    </select>
-                    <select class="tracker-member-select sort-select" data-index="1">
-                        <option value="">-- Member 2 --</option>
-                    </select>
-                    <select class="tracker-member-select sort-select" data-index="2">
-                        <option value="">-- Member 3 (optional) --</option>
-                    </select>
-                    <select class="tracker-member-select sort-select" data-index="3">
-                        <option value="">-- Member 4 (optional) --</option>
-                    </select>
-                    <select class="tracker-member-select sort-select" data-index="4">
-                        <option value="">-- Member 5 (optional) --</option>
-                    </select>
-                </div>
-                <button class="btn btn-primary" id="mainTrackerCompareBtn">Compare</button>
-                <div id="mainTrackerComparisonResults" style="margin-top:16px;"></div>
-            </div>
-        </div>
-    </section>
-
     <!-- Map Section -->
     <section id="map" class="section">
         <h2 class="section-title">Our Burger Map</h2>
@@ -190,6 +148,38 @@
             <button type="submit" class="btn btn-primary" id="submitBtn">Submit Rating</button>
             <div id="formMessage" class="form-message"></div>
         </form>
+    </section>
+
+    <!-- Attendance Tracker Section -->
+    <section id="tracker" class="section">
+        <h2 class="section-title">Attendance Tracker</h2>
+        <p class="section-desc">See who attended which burgers and compare member attendance.</p>
+
+        <div class="content-container" style="max-width:1100px;margin:0 auto;">
+            <!-- Individual Member View -->
+            <div class="form-group" style="margin-bottom:30px;">
+                <label style="display:block;margin-bottom:8px;font-weight:500;">View Individual Member</label>
+                <select id="mainTrackerMemberSelect" class="sort-select" style="max-width:400px;">
+                    <option value="">-- Select a member --</option>
+                </select>
+                <div id="mainTrackerIndividualResults" style="margin-top:12px;"></div>
+            </div>
+
+            <!-- Multi-Member Comparison -->
+            <div class="form-group">
+                <label style="display:block;margin-bottom:8px;font-weight:500;">Compare Members</label>
+                <p style="color:#666;font-size:0.9em;margin-bottom:12px;">Compare attendance across multiple members.</p>
+                <div id="mainTrackerMemberSelectors" style="display:flex;flex-direction:column;gap:12px;margin-bottom:12px;">
+                    <!-- Dynamic selects will be added here -->
+                </div>
+                <div style="display:flex;gap:12px;margin-bottom:12px;">
+                    <button class="btn btn-secondary" id="addMemberBtn">+ Add Member</button>
+                    <button class="btn btn-secondary" id="clearMembersBtn">Clear All</button>
+                    <button class="btn btn-primary" id="mainTrackerCompareBtn">Compare</button>
+                </div>
+                <div id="mainTrackerComparisonResults" style="margin-top:16px;"></div>
+            </div>
+        </div>
     </section>
 
     <!-- Feedback Section -->

@@ -280,7 +280,7 @@ async function loadAttendeesData() {
         // Historical submission counts from original Google Sheet
         // Maps ranking -> number of original form submissions
         const historicalCounts = {
-            1: 0,  // Rolo's - not in original sheet
+            1: 6,  // Rolo's
             2: 7,  // Red Hook Tavern
             3: 6,  // The Lions Bar & Grill
             4: 7,  // Virginia's
