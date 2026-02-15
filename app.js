@@ -90,6 +90,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Load rankings — this is the main content
     await loadRankings().catch(e => console.error('Rankings load failed:', e));
+
+    // Ensure rankings have no gaps (fixes deletions that happened before auto-recalc)
+    recalculateRankings().then(() => loadRankings()).catch(e => console.error('Recalc failed:', e));
+
     initMap();
 
     // Load secondary features in background
@@ -593,13 +597,19 @@ async function updateBurgerRating(burgerLabel) {
 
         if (!ratings || ratings.length === 0) return;
 
-        // Calculate average of all four scores
+        // Calculate average of each category across all raters
         const avgToppings = ratings.reduce((sum, r) => sum + (r.toppings || 0), 0) / ratings.length;
         const avgBun = ratings.reduce((sum, r) => sum + (r.bun || 0), 0) / ratings.length;
         const avgDoneness = ratings.reduce((sum, r) => sum + (r.doneness || 0), 0) / ratings.length;
         const avgFlavor = ratings.reduce((sum, r) => sum + (r.flavor || 0), 0) / ratings.length;
 
-        const overallAvg = ((avgToppings + avgBun + avgDoneness + avgFlavor) / 4).toFixed(2);
+        // Weighted scoring: Flavor 40%, Toppings 20%, Bun 20%, Doneness 20%
+        const overallAvg = (
+            avgToppings * 0.20 +
+            avgBun * 0.20 +
+            avgDoneness * 0.20 +
+            avgFlavor * 0.40
+        ).toFixed(2);
 
         // Parse the burger label to get restaurant and description
         const parts = burgerLabel.split(' \u2014 ');
