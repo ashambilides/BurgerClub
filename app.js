@@ -8,6 +8,7 @@ let galleryPhotos = [];
 let lightboxIndex = 0;
 let map;
 let adminLoggedIn = false;
+let attendeesData = {}; // Maps ranking -> array of names
 
 // ============================================
 // SUPABASE REST HELPERS
@@ -176,6 +177,9 @@ async function loadRankings() {
             'lng': row.lng || null,
         }));
 
+        // Load attendees data
+        await loadAttendeesData();
+
         renderTable(burgerData);
         initTableControls();
         populateBurgerSelect();
@@ -188,15 +192,19 @@ async function loadRankings() {
 
 function renderTable(data) {
     const table = document.getElementById('sheets-table');
-    const headers = ['Ranking', 'Burger Rating', 'Restaurant', 'Description', 'Price', 'Location', 'Date of Visit'];
+    const headers = ['Ranking', 'Burger Rating', 'Restaurant', 'Description', 'Price', 'Location', 'Date of Visit', 'Attendees'];
 
     table.innerHTML = `
         <thead>
             <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
         </thead>
         <tbody>
-            ${data.map(row => `
-                <tr>
+            ${data.map(row => {
+                const ranking = row['Ranking'];
+                const attendees = attendeesData[ranking] || [];
+                const count = attendees.length;
+
+                return `<tr>
                     <td class="rank-cell">${escapeHtml(row['Ranking'])}</td>
                     <td class="rating-cell">${escapeHtml(row['Burger Rating'])}</td>
                     <td><strong>${escapeHtml(row['Restaurant'])}</strong></td>
@@ -204,8 +212,11 @@ function renderTable(data) {
                     <td>${escapeHtml(row['Price'])}</td>
                     <td>${escapeHtml(row['Location'])}</td>
                     <td>${escapeHtml(row['Date of Visit'])}</td>
-                </tr>
-            `).join('')}
+                    <td class="attendees-cell" onclick="showAttendees(${ranking})" style="cursor:pointer;color:var(--red);font-weight:500;">
+                        ${count > 0 ? count : '—'}
+                    </td>
+                </tr>`;
+            }).join('')}
         </tbody>
     `;
 }
@@ -256,6 +267,93 @@ function parsePrice(priceStr) {
     if (!priceStr) return 0;
     return parseFloat(priceStr.replace(/[^0-9.]/g, '')) || 0;
 }
+
+// ============================================
+// ATTENDEES TRACKING
+// ============================================
+
+async function loadAttendeesData() {
+    if (!isConfigured()) return;
+
+    try {
+        // Load attendees table
+        const attendees = await dbSelect('attendees', 'select=*');
+
+        // Load ratings to get names from form submissions
+        const ratings = await dbSelect('ratings', 'select=*');
+
+        // Clear existing data
+        attendeesData = {};
+
+        // Build map: burger label -> ranking
+        const burgerToRanking = {};
+        burgerData.forEach(row => {
+            const label = `${row['Restaurant']} — ${row['Description']}`;
+            burgerToRanking[label] = row['Ranking'];
+        });
+
+        // Populate from attendees table first
+        attendees.forEach(att => {
+            const ranking = att.burger_id;
+            if (!attendeesData[ranking]) attendeesData[ranking] = [];
+            attendeesData[ranking].push(att.name);
+        });
+
+        // Add names from ratings (auto-populate for new submissions)
+        ratings.forEach(r => {
+            const burgerLabel = r.burger;
+            const ranking = burgerToRanking[burgerLabel];
+            if (!ranking) return;
+
+            if (!attendeesData[ranking]) attendeesData[ranking] = [];
+
+            // Only add if not already in attendees list
+            if (!attendeesData[ranking].includes(r.name)) {
+                attendeesData[ranking].push(r.name);
+            }
+        });
+
+    } catch (err) {
+        console.error('Load attendees error:', err);
+    }
+}
+
+function showAttendees(ranking) {
+    const attendees = attendeesData[ranking] || [];
+    const burger = burgerData.find(b => b['Ranking'] == ranking);
+
+    const modal = document.getElementById('attendeesModal');
+    const title = document.getElementById('attendeesModalTitle');
+    const list = document.getElementById('attendeesModalList');
+
+    if (!burger) return;
+
+    title.textContent = `Attendees: ${burger['Restaurant']}`;
+
+    if (attendees.length === 0) {
+        list.innerHTML = '<p style="color:#999;text-align:center;">No attendees recorded yet.</p>';
+    } else {
+        list.innerHTML = attendees.map(name => `
+            <div class="attendee-item">${escapeHtml(name)}</div>
+        `).join('');
+    }
+
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function closeAttendeesModal() {
+    document.getElementById('attendeesModal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+// Initialize attendees modal close handler
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('attendeesModalClose')?.addEventListener('click', closeAttendeesModal);
+    document.getElementById('attendeesModal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeAttendeesModal();
+    });
+});
 
 // ============================================
 // MAP (Leaflet.js)
@@ -566,6 +664,25 @@ async function handleFormSubmit(e) {
         }
 
         await dbInsert('ratings', rating);
+
+        // Add attendee automatically
+        const burgerToRanking = {};
+        burgerData.forEach(row => {
+            const label = `${row['Restaurant']} — ${row['Description']}`;
+            burgerToRanking[label] = row['Ranking'];
+        });
+        const ranking = burgerToRanking[config.active_burger];
+        if (ranking) {
+            try {
+                await dbInsert('attendees', {
+                    burger_id: parseInt(ranking),
+                    name: rating.name,
+                    rating_id: null,
+                });
+            } catch (attendeeErr) {
+                console.error('Failed to add attendee:', attendeeErr);
+            }
+        }
 
         msg.textContent = 'Rating submitted! Thanks for your vote.';
         msg.className = 'form-message success';
@@ -929,6 +1046,10 @@ async function loadAdminData() {
     // Load suggestions and requests
     loadSuggestions();
     loadRequests();
+
+    // Load attendees manager
+    loadAttendeesManager();
+    loadAttendanceTracker();
 }
 
 function populateBurgerSelect() {
@@ -1690,4 +1811,213 @@ function sortRatings() {
             rows.forEach(row => tbody.appendChild(row));
         });
     }
+}
+
+// ============================================
+// ATTENDEES MANAGER (Admin)
+// ============================================
+
+async function loadAttendeesManager() {
+    const container = document.getElementById('adminAttendeesManager');
+    if (!container) return;
+
+    try {
+        await loadAttendeesData();
+
+        let html = '';
+        for (const row of burgerData) {
+            const ranking = row['Ranking'];
+            const attendees = attendeesData[ranking] || [];
+
+            html += `
+                <div class="attendees-manager-item" style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
+                        <strong style="color:var(--red);">#${ranking} ${escapeHtml(row['Restaurant'])}</strong>
+                        <span style="font-size:0.85em;color:var(--text-muted);">${attendees.length} attendee${attendees.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div id="attendees-list-${ranking}" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+                        ${attendees.map((name, i) => `
+                            <div class="attendee-tag">
+                                ${escapeHtml(name)}
+                                <button class="tag-remove" onclick="removeAttendee(${ranking}, '${escapeHtml(name).replace(/'/g, "\\'")}')">×</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <input type="text" id="add-attendee-${ranking}" placeholder="Add attendee name" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+                        <button class="btn-small" onclick="addAttendee(${ranking})">Add</button>
+                    </div>
+                </div>
+            `;
+        }
+        container.innerHTML = html;
+    } catch (err) {
+        console.error('Load attendees manager error:', err);
+        container.innerHTML = '<p style="color:#999;">Failed to load attendees manager.</p>';
+    }
+}
+
+async function addAttendee(ranking) {
+    const input = document.getElementById(`add-attendee-${ranking}`);
+    const name = input.value.trim();
+
+    if (!name) {
+        alert('Please enter a name.');
+        return;
+    }
+
+    try {
+        await dbInsert('attendees', {
+            burger_id: parseInt(ranking),
+            name: name,
+        });
+
+        input.value = '';
+        await loadAttendeesData();
+        await loadRankings();
+        loadAttendeesManager();
+    } catch (err) {
+        console.error('Add attendee error:', err);
+        alert('Failed to add attendee: ' + err.message);
+    }
+}
+
+async function removeAttendee(ranking, name) {
+    if (!confirm(`Remove ${name} from this burger's attendees?`)) return;
+
+    try {
+        // Find and delete the attendee entry
+        const all = await dbSelect('attendees', `select=*&burger_id=eq.${ranking}&name=eq.${encodeURIComponent(name)}`);
+        if (all && all.length > 0) {
+            await dbDelete('attendees', 'id', all[0].id);
+        }
+
+        await loadAttendeesData();
+        await loadRankings();
+        loadAttendeesManager();
+    } catch (err) {
+        console.error('Remove attendee error:', err);
+        alert('Failed to remove attendee: ' + err.message);
+    }
+}
+
+// ============================================
+// ATTENDANCE TRACKER
+// ============================================
+
+async function loadAttendanceTracker() {
+    const select1 = document.getElementById('trackerMemberSelect');
+    const select2 = document.getElementById('trackerMember1');
+    const select3 = document.getElementById('trackerMember2');
+
+    if (!select1) return;
+
+    await loadAttendeesData();
+
+    // Get all unique names
+    const allNames = new Set();
+    Object.values(attendeesData).forEach(names => {
+        names.forEach(n => allNames.add(n));
+    });
+
+    const sorted = Array.from(allNames).sort();
+
+    [select1, select2, select3].forEach(sel => {
+        if (!sel) return;
+        sel.innerHTML = '<option value="">-- Select member --</option>' +
+            sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    });
+
+    // Event listeners
+    select1?.addEventListener('change', showIndividualAttendance);
+    document.getElementById('trackerCompareBtn')?.addEventListener('click', compareAttendance);
+}
+
+function showIndividualAttendance() {
+    const name = document.getElementById('trackerMemberSelect').value;
+    const resultsDiv = document.getElementById('trackerIndividualResults');
+
+    if (!name) {
+        resultsDiv.innerHTML = '';
+        return;
+    }
+
+    const attended = [];
+    for (const [ranking, names] of Object.entries(attendeesData)) {
+        if (names.includes(name)) {
+            const burger = burgerData.find(b => b['Ranking'] == ranking);
+            if (burger) attended.push(burger);
+        }
+    }
+
+    if (attended.length === 0) {
+        resultsDiv.innerHTML = `<p style="color:#999;">${escapeHtml(name)} hasn't attended any burgers yet.</p>`;
+        return;
+    }
+
+    resultsDiv.innerHTML = `
+        <div style="background:var(--bg);padding:16px;border-radius:8px;margin-top:12px;">
+            <h4 style="margin-bottom:10px;color:var(--red);">${escapeHtml(name)} - ${attended.length} burger${attended.length !== 1 ? 's' : ''}</h4>
+            ${attended.map(b => `
+                <div style="padding:6px 0;border-bottom:1px solid var(--border);">
+                    #${b['Ranking']} ${escapeHtml(b['Restaurant'])} — ${escapeHtml(b['Description'])}
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+function compareAttendance() {
+    const name1 = document.getElementById('trackerMember1').value;
+    const name2 = document.getElementById('trackerMember2').value;
+    const resultsDiv = document.getElementById('trackerComparisonResults');
+
+    if (!name1 || !name2) {
+        alert('Please select two members to compare.');
+        return;
+    }
+
+    const attended1 = [];
+    const attended2 = [];
+
+    for (const [ranking, names] of Object.entries(attendeesData)) {
+        const burger = burgerData.find(b => b['Ranking'] == ranking);
+        if (!burger) continue;
+
+        if (names.includes(name1)) attended1.push(burger);
+        if (names.includes(name2)) attended2.push(burger);
+    }
+
+    const both = attended1.filter(b => attended2.some(b2 => b2['Ranking'] === b['Ranking']));
+    const only1 = attended1.filter(b => !attended2.some(b2 => b2['Ranking'] === b['Ranking']));
+    const only2 = attended2.filter(b => !attended1.some(b1 => b1['Ranking'] === b['Ranking']));
+
+    resultsDiv.innerHTML = `
+        <div style="background:var(--bg);padding:16px;border-radius:8px;margin-top:12px;">
+            <h4 style="color:var(--red);margin-bottom:10px;">Comparison Results</h4>
+            <p><strong>${escapeHtml(name1)}:</strong> ${attended1.length} burgers | <strong>${escapeHtml(name2)}:</strong> ${attended2.length} burgers</p>
+            <p><strong>Both attended:</strong> ${both.length} burger${both.length !== 1 ? 's' : ''}</p>
+
+            ${both.length > 0 ? `
+                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
+                    <strong>Both:</strong>
+                    ${both.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
+                </div>
+            ` : ''}
+
+            ${only1.length > 0 ? `
+                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
+                    <strong>Only ${escapeHtml(name1)}:</strong>
+                    ${only1.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
+                </div>
+            ` : ''}
+
+            ${only2.length > 0 ? `
+                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
+                    <strong>Only ${escapeHtml(name2)}:</strong>
+                    ${only2.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `;
 }

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "WebFetch(domain:yezihsgtccwitfwgwudv.supabase.co)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "WebFetch(domain:ashambilides.github.io)",
+      "WebFetch(domain:geocoding.geo.census.gov)"
+    ]
+  }
+}
