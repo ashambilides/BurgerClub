@@ -57,15 +57,21 @@ async function dbDelete(table, matchColumn, matchValue) {
 }
 
 async function storageUpload(bucket, path, file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
     const res = await fetch(`${STORAGE_BASE}/object/${bucket}/${path}`, {
         method: 'POST',
         headers: {
             'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
         },
         body: file,
     });
     if (!res.ok) throw new Error(`Upload failed: ${res.status} ${await res.text()}`);
-    return `${STORAGE_BASE}/object/public/${bucket}/${path}`;
+
+    // Return the public URL
+    return `${CONFIG.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
 }
 
 function isConfigured() {
@@ -592,12 +598,61 @@ async function handleFormSubmit(e) {
         msg.textContent = 'Rating submitted! Thanks for your vote.';
         msg.className = 'form-message success';
         e.target.reset();
+
+        // Reload gallery if photo was uploaded
+        if (photoFile) {
+            await loadGallery();
+        }
+
+        // Recalculate and update burger rating in results table
+        await updateBurgerRating(config.active_burger);
     } catch (err) {
         console.error('Submit error:', err);
         msg.textContent = 'Failed to submit. Please try again.';
         msg.className = 'form-message error';
     }
     submitBtn.disabled = false;
+}
+
+// ============================================
+// UPDATE BURGER RATING
+// ============================================
+
+async function updateBurgerRating(burgerLabel) {
+    try {
+        // Get all ratings for this burger
+        const ratings = await dbSelect('ratings', `select=*&burger=eq.${encodeURIComponent(burgerLabel)}`);
+
+        if (!ratings || ratings.length === 0) return;
+
+        // Calculate average of all four scores
+        const avgToppings = ratings.reduce((sum, r) => sum + (r.toppings || 0), 0) / ratings.length;
+        const avgBun = ratings.reduce((sum, r) => sum + (r.bun || 0), 0) / ratings.length;
+        const avgDoneness = ratings.reduce((sum, r) => sum + (r.doneness || 0), 0) / ratings.length;
+        const avgFlavor = ratings.reduce((sum, r) => sum + (r.flavor || 0), 0) / ratings.length;
+
+        const overallAvg = ((avgToppings + avgBun + avgDoneness + avgFlavor) / 4).toFixed(2);
+
+        // Parse the burger label to get restaurant and description
+        const parts = burgerLabel.split(' — ');
+        const restaurant = parts[0];
+        const description = parts.length > 1 ? parts[1] : '';
+
+        // Find and update the corresponding entry in results table
+        const results = await dbSelect('results',
+            `select=*&restaurant=eq.${encodeURIComponent(restaurant)}&description=eq.${encodeURIComponent(description)}`);
+
+        if (results && results.length > 0) {
+            const result = results[0];
+            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', result.ranking);
+
+            // Reload the rankings table and map to show updated rating
+            await loadRankings();
+            rebuildMap();
+        }
+    } catch (err) {
+        console.error('Update burger rating error:', err);
+    }
 }
 
 // ============================================
@@ -1356,6 +1411,7 @@ async function loadSuggestions() {
                         <div class="suggestion-text">${escapeHtml(s.suggestion)}</div>
                         ${addressedHtml}
                     </div>
+                    <button class="btn-delete-suggestion" onclick="deleteSuggestion(${s.id}, '${escapeHtml(s.name)}')" title="Delete this suggestion">&times;</button>
                 </div>
             `;
         }).join('');
@@ -1376,6 +1432,19 @@ async function toggleSuggestion(id, addressed) {
     } catch (err) {
         console.error('Toggle suggestion error:', err);
         alert('Failed to update suggestion.');
+    }
+}
+
+async function deleteSuggestion(id, name) {
+    if (!confirm(`Are you sure you want to delete the suggestion from "${name}"?`)) return;
+    if (!confirm(`FINAL WARNING: This will permanently delete this suggestion. Continue?`)) return;
+
+    try {
+        await dbDelete('suggestions', 'id', id);
+        loadSuggestions();
+    } catch (err) {
+        console.error('Delete suggestion error:', err);
+        alert('Failed to delete suggestion: ' + err.message);
     }
 }
 
@@ -1455,6 +1524,7 @@ async function loadRequests() {
                         <div class="suggestion-text">${escapeHtml(s.request)}</div>
                         ${addressedHtml}
                     </div>
+                    <button class="btn-delete-suggestion" onclick="deleteRequest(${s.id}, '${escapeHtml(s.name)}')" title="Delete this request">&times;</button>
                 </div>
             `;
         }).join('');
@@ -1475,6 +1545,19 @@ async function toggleRequest(id, addressed) {
     } catch (err) {
         console.error('Toggle request error:', err);
         alert('Failed to update request.');
+    }
+}
+
+async function deleteRequest(id, name) {
+    if (!confirm(`Are you sure you want to delete the request from "${name}"?`)) return;
+    if (!confirm(`FINAL WARNING: This will permanently delete this request. Continue?`)) return;
+
+    try {
+        await dbDelete('restaurant_requests', 'id', id);
+        loadRequests();
+    } catch (err) {
+        console.error('Delete request error:', err);
+        alert('Failed to delete request: ' + err.message);
     }
 }
 

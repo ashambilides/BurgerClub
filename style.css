@@ -1165,6 +1165,26 @@ tr:nth-child(even):hover td {
     background: #f9f9f9;
 }
 
+.btn-delete-suggestion {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    border-radius: 4px;
+}
+
+.btn-delete-suggestion:hover {
+    color: var(--red);
+    background: rgba(211, 47, 47, 0.1);
+}
+
 .suggestion-check {
     padding-top: 2px;
     flex-shrink: 0;
