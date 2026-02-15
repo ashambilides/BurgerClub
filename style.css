@@ -962,6 +962,31 @@ tr:nth-child(even):hover td {
     border-bottom: none;
 }
 
+.ratings-burger-header-collapsible {
+    cursor: pointer;
+    user-select: none;
+}
+
+.ratings-burger-header-collapsible:hover {
+    background: #e8e8e8;
+}
+
+.ratings-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+
+.ratings-controls .search-input {
+    flex: 1;
+    min-width: 200px;
+}
+
+.ratings-controls .sort-select {
+    min-width: 180px;
+}
+
 /* Address Search */
 .address-search-wrapper {
     display: flex;

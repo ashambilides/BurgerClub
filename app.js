@@ -711,15 +711,48 @@ async function loadAdminData() {
         const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc&limit=100');
         const ratingsDiv = document.getElementById('submittedRatings');
         if (ratings && ratings.length > 0) {
+            // Filter ratings to only include burgers that still exist in burgerData
+            const existingBurgers = new Set(burgerData.map(b => {
+                const restaurant = b['Restaurant'] || '';
+                const desc = b['Description'] || '';
+                return `${restaurant} — ${desc}`;
+            }));
+
+            const filteredRatings = ratings.filter(r => {
+                // Check if this burger still exists
+                const burgerLabel = r.burger || '';
+                return existingBurgers.has(burgerLabel);
+            });
+
+            if (filteredRatings.length === 0) {
+                ratingsDiv.innerHTML = '<p style="color:#999;">No ratings for current burgers.</p>';
+                return;
+            }
+
             // Group by burger for summary
             const byBurger = {};
-            ratings.forEach(r => {
+            filteredRatings.forEach(r => {
                 const key = r.burger || 'Unknown';
                 if (!byBurger[key]) byBurger[key] = [];
                 byBurger[key].push(r);
             });
 
-            let html = '';
+            // Build interactive ratings table with search, sort, collapse
+            let html = `
+                <div class="ratings-controls">
+                    <input type="text" id="ratingsSearch" placeholder="Search by name or burger..." class="search-input">
+                    <select id="ratingsSort" class="sort-select">
+                        <option value="date-desc">Newest First</option>
+                        <option value="date-asc">Oldest First</option>
+                        <option value="avg-desc">Highest Avg</option>
+                        <option value="avg-asc">Lowest Avg</option>
+                        <option value="burger-az">Burger A-Z</option>
+                        <option value="name-az">Name A-Z</option>
+                    </select>
+                </div>
+                <div id="ratingsResults">
+            `;
+
             for (const [burger, entries] of Object.entries(byBurger)) {
                 const avgT = (entries.reduce((s, r) => s + (r.toppings || 0), 0) / entries.length).toFixed(1);
                 const avgB = (entries.reduce((s, r) => s + (r.bun || 0), 0) / entries.length).toFixed(1);
@@ -727,34 +760,55 @@ async function loadAdminData() {
                 const avgF = (entries.reduce((s, r) => s + (r.flavor || 0), 0) / entries.length).toFixed(1);
                 const avgAll = ((parseFloat(avgT) + parseFloat(avgB) + parseFloat(avgD) + parseFloat(avgF)) / 4).toFixed(2);
 
+                const burgerId = burger.replace(/[^a-zA-Z0-9]/g, '_');
                 html += `
-                    <div class="ratings-burger-group">
-                        <div class="ratings-burger-header">
-                            <strong>${escapeHtml(burger)}</strong>
-                            <span class="ratings-avg">Avg: ${avgAll} (${entries.length} vote${entries.length > 1 ? 's' : ''})</span>
+                    <div class="ratings-burger-group" data-burger="${escapeHtml(burger)}" data-avg="${avgAll}">
+                        <div class="collapsible-header ratings-burger-header-collapsible" onclick="toggleRatingsGroup('${burgerId}')">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span class="collapse-arrow" id="arrow_${burgerId}">&#9654;</span>
+                                <strong>${escapeHtml(burger)}</strong>
+                                <span class="ratings-avg">Avg: ${avgAll} (${entries.length} vote${entries.length > 1 ? 's' : ''})</span>
+                            </div>
                         </div>
-                        <div class="ratings-summary">Toppings: ${avgT} | Bun: ${avgB} | Doneness: ${avgD} | Flavor: ${avgF}</div>
-                        <table class="ratings-table">
-                            <thead><tr><th>Name</th><th>Toppings</th><th>Bun</th><th>Doneness</th><th>Flavor</th><th>Avg</th><th>Date</th></tr></thead>
-                            <tbody>
-                                ${entries.map(r => {
-                                    const rowAvg = ((r.toppings + r.bun + r.doneness + r.flavor) / 4).toFixed(1);
-                                    return `<tr>
-                                        <td>${escapeHtml(r.name)}</td>
-                                        <td>${r.toppings}</td>
-                                        <td>${r.bun}</td>
-                                        <td>${r.doneness}</td>
-                                        <td>${r.flavor}</td>
-                                        <td><strong>${rowAvg}</strong></td>
-                                        <td>${new Date(r.created_at).toLocaleDateString()}</td>
-                                    </tr>`;
-                                }).join('')}
-                            </tbody>
-                        </table>
+                        <div id="group_${burgerId}" class="collapsible-body" style="display:none;">
+                            <div class="ratings-summary">Toppings: ${avgT} | Bun: ${avgB} | Doneness: ${avgD} | Flavor: ${avgF}</div>
+                            <table class="ratings-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Toppings</th>
+                                        <th>Bun</th>
+                                        <th>Doneness</th>
+                                        <th>Flavor</th>
+                                        <th>Avg</th>
+                                        <th>Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${entries.map(r => {
+                                        const rowAvg = ((r.toppings + r.bun + r.doneness + r.flavor) / 4).toFixed(1);
+                                        return `<tr data-name="${escapeHtml(r.name)}" data-date="${r.created_at}" data-avg="${rowAvg}">
+                                            <td>${escapeHtml(r.name)}</td>
+                                            <td>${r.toppings}</td>
+                                            <td>${r.bun}</td>
+                                            <td>${r.doneness}</td>
+                                            <td>${r.flavor}</td>
+                                            <td><strong>${rowAvg}</strong></td>
+                                            <td>${new Date(r.created_at).toLocaleDateString()}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 `;
             }
+            html += '</div>';
             ratingsDiv.innerHTML = html;
+
+            // Add event listeners for search and sort
+            document.getElementById('ratingsSearch').addEventListener('input', filterRatings);
+            document.getElementById('ratingsSort').addEventListener('change', sortRatings);
         } else {
             ratingsDiv.innerHTML = '<p style="color:#999;">No ratings submitted yet.</p>';
         }
@@ -1045,9 +1099,10 @@ async function handleAddBurger() {
         document.getElementById('newDate').value = '';
         clearAddressSelection();
 
-        // Reload everything so new burger appears in table, map, dropdowns
+        // Reload everything so new burger appears in table, map, dropdowns, gallery
         await loadRankings();
         rebuildMap();
+        await loadGallery();
         loadAdminData();
     } catch (err) {
         console.error('Add burger error:', err);
@@ -1454,4 +1509,85 @@ async function hashPassword(password) {
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================
+// RATINGS CONTROLS (Search, Sort, Collapse)
+// ============================================
+
+function toggleRatingsGroup(groupId) {
+    const group = document.getElementById('group_' + groupId);
+    const arrow = document.getElementById('arrow_' + groupId);
+    const isOpen = group.style.display !== 'none';
+    group.style.display = isOpen ? 'none' : 'block';
+    arrow.innerHTML = isOpen ? '&#9654;' : '&#9660;';
+}
+
+function filterRatings() {
+    const query = document.getElementById('ratingsSearch').value.toLowerCase();
+    const groups = document.querySelectorAll('.ratings-burger-group');
+
+    groups.forEach(group => {
+        const burger = (group.dataset.burger || '').toLowerCase();
+        const rows = group.querySelectorAll('tbody tr');
+        let hasMatch = false;
+
+        rows.forEach(row => {
+            const name = (row.dataset.name || '').toLowerCase();
+            const matches = burger.includes(query) || name.includes(query);
+            row.style.display = matches ? '' : 'none';
+            if (matches) hasMatch = true;
+        });
+
+        group.style.display = hasMatch ? '' : 'none';
+    });
+}
+
+function sortRatings() {
+    const sortBy = document.getElementById('ratingsSort').value;
+    const container = document.getElementById('ratingsResults');
+    const groups = Array.from(container.querySelectorAll('.ratings-burger-group'));
+
+    groups.sort((a, b) => {
+        switch (sortBy) {
+            case 'avg-desc':
+                return parseFloat(b.dataset.avg || 0) - parseFloat(a.dataset.avg || 0);
+            case 'avg-asc':
+                return parseFloat(a.dataset.avg || 0) - parseFloat(b.dataset.avg || 0);
+            case 'burger-az':
+                return (a.dataset.burger || '').localeCompare(b.dataset.burger || '');
+            case 'date-desc':
+            case 'date-asc':
+            case 'name-az':
+                // For these, we need to sort within each group
+                return 0;
+            default:
+                return 0;
+        }
+    });
+
+    // Re-append in sorted order
+    groups.forEach(group => container.appendChild(group));
+
+    // If sorting by date or name, sort rows within each group
+    if (sortBy === 'date-desc' || sortBy === 'date-asc' || sortBy === 'name-az') {
+        groups.forEach(group => {
+            const tbody = group.querySelector('tbody');
+            if (!tbody) return;
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+
+            rows.sort((a, b) => {
+                if (sortBy === 'date-desc') {
+                    return new Date(b.dataset.date || 0) - new Date(a.dataset.date || 0);
+                } else if (sortBy === 'date-asc') {
+                    return new Date(a.dataset.date || 0) - new Date(b.dataset.date || 0);
+                } else if (sortBy === 'name-az') {
+                    return (a.dataset.name || '').localeCompare(b.dataset.name || '');
+                }
+                return 0;
+            });
+
+            rows.forEach(row => tbody.appendChild(row));
+        });
+    }
 }
