@@ -326,23 +326,47 @@ async function loadAttendeesData() {
             }
         });
 
-        // Debug: Log which burgers have zero attendees after loading from ratings
-        console.log('=== ATTENDEE DEBUG ===');
-        burgerData.forEach(row => {
+        // For historical burgers: Add "Unknown" placeholders if they have a rating but no attendees
+        // Save these to the database so they can be edited later
+        for (const row of burgerData) {
             const ranking = row['Ranking'];
-            const label = `${row['Restaurant']} — ${row['Description']}`;
+            const burgerRating = row['Burger Rating'];
             const count = attendeesData[ranking]?.length || 0;
-            const ratingsForBurger = ratings.filter(r => r.burger === label);
 
-            if (count === 0 && ratingsForBurger.length > 0) {
-                console.warn(`❌ Burger #${ranking} has ${ratingsForBurger.length} ratings but 0 attendees: "${label}"`);
-                console.log('   Ratings in DB:', ratingsForBurger.map(r => ({burger: r.burger, name: r.name})));
-            } else if (count === 0) {
-                console.log(`⚪ Burger #${ranking} has no ratings and no attendees: "${label}"`);
-            } else {
-                console.log(`✅ Burger #${ranking} has ${count} attendees: "${label}"`);
+            // If burger has a rating score but zero attendees, it's historical data
+            // Add 4 "Unknown" placeholders (user can edit these in Admin)
+            if (burgerRating && burgerRating !== '' && count === 0) {
+                // Check if Unknown placeholders already exist in DB for this burger
+                const existingUnknowns = attendees.filter(a =>
+                    a.burger_id == ranking && a.name.startsWith('Unknown ')
+                );
+
+                // Only create if they don't exist yet
+                if (existingUnknowns.length === 0) {
+                    // Create Unknown placeholders in database
+                    for (let i = 1; i <= 4; i++) {
+                        const unknownName = `Unknown ${i}`;
+                        try {
+                            await dbInsert('attendees', {
+                                burger_id: parseInt(ranking),
+                                name: unknownName,
+                                rating_id: null,
+                            });
+                            attendeesData[ranking].push(unknownName);
+                        } catch (insertErr) {
+                            console.error(`Failed to create ${unknownName} for burger ${ranking}:`, insertErr);
+                        }
+                    }
+                } else {
+                    // Add existing unknowns to attendeesData
+                    existingUnknowns.forEach(u => {
+                        if (!attendeesData[ranking].includes(u.name)) {
+                            attendeesData[ranking].push(u.name);
+                        }
+                    });
+                }
             }
-        });
+        }
 
     } catch (err) {
         console.error('Load attendees error:', err);
@@ -1894,12 +1918,18 @@ async function loadAttendeesManager() {
                         <span style="font-size:0.85em;color:var(--text-muted);">${attendees.length} attendee${attendees.length !== 1 ? 's' : ''}</span>
                     </div>
                     <div id="attendees-list-${ranking}" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-                        ${attendees.map((name, i) => `
-                            <div class="attendee-tag">
-                                ${escapeHtml(name)}
+                        ${attendees.map((name, i) => {
+                            const isUnknown = name.startsWith('Unknown ');
+                            return `
+                            <div class="attendee-tag ${isUnknown ? 'unknown-attendee' : ''}">
+                                <span ${isUnknown ? `onclick="editUnknownAttendee(${ranking}, '${escapeHtml(name).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="Click to edit"` : ''}>
+                                    ${escapeHtml(name)}
+                                    ${isUnknown ? ' ✏️' : ''}
+                                </span>
                                 <button class="tag-remove" onclick="removeAttendee(${ranking}, '${escapeHtml(name).replace(/'/g, "\\'")}')">×</button>
                             </div>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </div>
                     <div style="display:flex;gap:8px;">
                         <input type="text" id="add-attendee-${ranking}" placeholder="Add attendee name" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
@@ -1959,6 +1989,37 @@ async function removeAttendee(ranking, name) {
     }
 }
 
+async function editUnknownAttendee(ranking, oldName) {
+    const newName = prompt(`Replace "${oldName}" with:`, '');
+    if (!newName || newName.trim() === '') return;
+    if (newName.trim() === oldName) return;
+
+    try {
+        // Find the attendee entry
+        const all = await dbSelect('attendees', `select=*&burger_id=eq.${ranking}&name=eq.${encodeURIComponent(oldName)}`);
+        if (all && all.length > 0) {
+            // Update the name
+            await dbUpdate('attendees', { name: newName.trim() }, 'id', all[0].id);
+        } else {
+            // If not in DB yet (e.g., was just generated), create it
+            await dbInsert('attendees', {
+                burger_id: parseInt(ranking),
+                name: newName.trim(),
+                rating_id: null,
+            });
+        }
+
+        await loadAttendeesData();
+        await loadRankings();
+        loadAttendeesManager();
+        loadMainAttendanceTracker();
+        loadAttendanceTracker();
+    } catch (err) {
+        console.error('Edit attendee error:', err);
+        alert('Failed to edit attendee: ' + err.message);
+    }
+}
+
 // ============================================
 // ATTENDANCE TRACKER
 // ============================================
@@ -1972,10 +2033,15 @@ async function loadAttendanceTracker() {
 
     await loadAttendeesData();
 
-    // Get all unique names
+    // Get all unique names (excluding "Unknown" placeholders)
     const allNames = new Set();
     Object.values(attendeesData).forEach(names => {
-        names.forEach(n => allNames.add(n));
+        names.forEach(n => {
+            // Filter out "Unknown" placeholders from tracker
+            if (!n.startsWith('Unknown ')) {
+                allNames.add(n);
+            }
+        });
     });
 
     const sorted = Array.from(allNames).sort();
@@ -2091,10 +2157,15 @@ async function loadMainAttendanceTracker() {
 
     await loadAttendeesData();
 
-    // Get all unique names
+    // Get all unique names (excluding "Unknown" placeholders)
     const allNames = new Set();
     Object.values(attendeesData).forEach(names => {
-        names.forEach(n => allNames.add(n));
+        names.forEach(n => {
+            // Filter out "Unknown" placeholders from tracker
+            if (!n.startsWith('Unknown ')) {
+                allNames.add(n);
+            }
+        });
     });
 
     const sorted = Array.from(allNames).sort();
