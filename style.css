@@ -806,6 +806,30 @@ tr:nth-child(even):hover td {
     color: var(--red);
 }
 
+/* Collapsible Section */
+.collapsible-header {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+}
+
+.collapsible-header h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.collapse-arrow {
+    font-size: 0.7em;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+}
+
+.collapsible-header:hover .collapse-arrow {
+    color: var(--red);
+}
+
 /* Admin Burger List */
 .admin-burger-list {
     max-height: 400px;

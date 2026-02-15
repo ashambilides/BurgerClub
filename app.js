@@ -348,6 +348,70 @@ function initMap() {
     observer.observe(document.getElementById('map'));
 }
 
+function rebuildMap() {
+    if (!map) return;
+    // Remove all existing markers
+    map.eachLayer(layer => {
+        if (layer instanceof L.Marker) map.removeLayer(layer);
+    });
+    // Re-add markers from current burgerData
+    const burgerIcon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="
+            background: #d32f2f;
+            width: 28px;
+            height: 28px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            border: 3px solid white;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        "><span style="transform:rotate(45deg);font-size:12px;">&#127828;</span></div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 28],
+        popupAnchor: [0, -28],
+    });
+
+    const grouped = {};
+    burgerData.forEach(row => {
+        const addr = (row['Location'] || '').toLowerCase().trim();
+        if (!addr) return;
+        if (!grouped[addr]) grouped[addr] = [];
+        grouped[addr].push(row);
+    });
+
+    for (const [addr, entries] of Object.entries(grouped)) {
+        let coords = ADDRESS_COORDS[addr];
+        if (!coords) {
+            for (const [addrKey, addrCoords] of Object.entries(ADDRESS_COORDS)) {
+                if (addr.includes(addrKey) || addrKey.includes(addr)) {
+                    coords = addrCoords;
+                    break;
+                }
+            }
+        }
+        if (coords) {
+            const burgersHtml = entries.map(row => `
+                <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
+                    <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
+                    <div class="popup-detail">${escapeHtml(row['Description'])}</div>
+                    <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
+                </div>
+            `).join('');
+            const marker = L.marker(coords, { icon: burgerIcon }).addTo(map);
+            marker.bindPopup(`
+                <div class="map-popup">
+                    <h3>${escapeHtml(entries[0]['Restaurant'])}</h3>
+                    <div class="popup-detail" style="margin-bottom:8px;">${escapeHtml(entries[0]['Location'])}</div>
+                    ${burgersHtml}
+                </div>
+            `, { maxWidth: 280 });
+        }
+    }
+}
+
 // ============================================
 // GALLERY
 // ============================================
@@ -578,6 +642,15 @@ function initAdminPanel() {
     document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
     document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
     initAddressSearch();
+
+    // Collapsible burger list toggle
+    document.getElementById('burgerListToggle').addEventListener('click', () => {
+        const wrapper = document.getElementById('adminBurgerListWrapper');
+        const arrow = document.querySelector('#burgerListToggle .collapse-arrow');
+        const isOpen = wrapper.style.display !== 'none';
+        wrapper.style.display = isOpen ? 'none' : 'block';
+        arrow.textContent = isOpen ? '\u25B6' : '\u25BC';
+    });
 }
 
 async function handleAdminLogin() {
@@ -711,16 +784,18 @@ async function loadAdminData() {
         if (burgerData.length > 0) {
             const sorted = [...burgerData].sort((a, b) =>
                 (a['Restaurant'] || '').localeCompare(b['Restaurant'] || ''));
-            burgerListDiv.innerHTML = sorted.map(row => `
+            burgerListDiv.innerHTML = sorted.map(row => {
+                const safeRestaurant = (row['Restaurant'] || '').replace(/'/g, "\\'");
+                return `
                 <div class="admin-burger-entry">
                     <div class="admin-burger-info">
                         <strong>#${escapeHtml(row['Ranking'])} ${escapeHtml(row['Restaurant'])}</strong>
                         <span class="admin-burger-desc">${escapeHtml(row['Description'])}</span>
                         <span class="admin-burger-meta">${escapeHtml(row['Price'])} · ${escapeHtml(row['Location'])} · ${escapeHtml(row['Date of Visit'])}</span>
                     </div>
-                    <button class="btn-delete-burger" onclick="deleteBurger(${escapeHtml(row['Ranking'])})" title="Delete this burger">&times;</button>
+                    <button class="btn-delete-burger" onclick="deleteBurger(${escapeHtml(row['Ranking'])}, '${safeRestaurant}')" title="Delete this burger">&times;</button>
                 </div>
-            `).join('');
+            `}).join('');
         } else {
             burgerListDiv.innerHTML = '<p style="color:#999;">No burgers yet.</p>';
         }
@@ -735,6 +810,11 @@ function populateBurgerSelect() {
     const gallerySelect = document.getElementById('galleryBurgerSelect');
 
     const selects = [formSelect, gallerySelect].filter(Boolean);
+
+    // Clear existing options first (keep the placeholder)
+    selects.forEach(select => {
+        select.innerHTML = '<option value="">-- Select a burger --</option>';
+    });
 
     // Build options sorted alphabetically by restaurant then description
     const options = burgerData.map(row => {
@@ -817,18 +897,25 @@ async function searchAddress() {
 
         resultsDiv.innerHTML = data.map((item, i) => {
             const addr = item.address || {};
-            const mainLine = [addr.house_number, addr.road].filter(Boolean).join(' ') ||
+            const street = [addr.house_number, addr.road].filter(Boolean).join(' ') ||
                              item.display_name.split(',')[0];
-            const detailLine = [addr.city || addr.town || addr.village, addr.state, addr.postcode]
+            const city = addr.city || addr.town || addr.village || addr.hamlet || '';
+            const borough = addr.suburb || addr.neighbourhood || '';
+            // For NYC: use borough (Brooklyn, Manhattan, etc.) if city is "New York" or "City of New York"
+            const cityDisplay = (city.toLowerCase().includes('new york') && borough) ? borough : city;
+            const state = addr.state ? abbrevState(addr.state) : '';
+            const zip = addr.postcode || '';
+            // Build formatted address like: "592 Leonard Street, Brooklyn, NY 11222"
+            const formattedAddr = [street, cityDisplay, [state, zip].filter(Boolean).join(' ')]
                 .filter(Boolean).join(', ');
 
             return `
                 <div class="address-result-item" data-index="${i}"
                      data-lat="${item.lat}" data-lon="${item.lon}"
-                     data-display="${escapeHtml(item.display_name)}"
-                     data-short="${escapeHtml(detailLine || item.display_name)}">
-                    <div class="addr-main">${escapeHtml(mainLine)}</div>
-                    <div class="addr-detail">${escapeHtml(detailLine || item.display_name)}</div>
+                     data-formatted="${escapeHtml(formattedAddr)}"
+                     data-display="${escapeHtml(item.display_name)}">
+                    <div class="addr-main">${escapeHtml(street)}</div>
+                    <div class="addr-detail">${escapeHtml([cityDisplay, state, zip].filter(Boolean).join(', '))}</div>
                 </div>
             `;
         }).join('');
@@ -846,18 +933,17 @@ async function searchAddress() {
 function selectAddress(item) {
     const lat = parseFloat(item.dataset.lat);
     const lon = parseFloat(item.dataset.lon);
-    const display = item.dataset.display;
-    const short = item.dataset.short;
+    const formatted = item.dataset.formatted;
 
-    selectedAddressData = { lat, lon, display, short };
+    selectedAddressData = { lat, lon, formatted };
 
     document.getElementById('newLat').value = lat;
     document.getElementById('newLng').value = lon;
-    document.getElementById('newLocation').value = short;
+    document.getElementById('newLocation').value = formatted;
 
     const selectedDiv = document.getElementById('selectedAddress');
     selectedDiv.innerHTML = `
-        &#x2705; <strong>${escapeHtml(display)}</strong>
+        &#x2705; <strong>${escapeHtml(formatted)}</strong>
         <span class="clear-address" title="Clear selection">&times;</span>
     `;
     selectedDiv.style.display = 'flex';
@@ -867,7 +953,7 @@ function selectAddress(item) {
     });
 
     document.getElementById('addressResults').classList.remove('show');
-    document.getElementById('newAddress').value = display.split(',')[0];
+    document.getElementById('newAddress').value = formatted;
 }
 
 function clearAddressSelection() {
@@ -894,12 +980,25 @@ async function handleAddBurger() {
         return;
     }
 
+    // Auto-format price with $
+    let rawPrice = document.getElementById('newPrice').value.trim();
+    rawPrice = rawPrice.replace(/[^0-9.]/g, ''); // strip non-numeric
+    if (rawPrice && !rawPrice.startsWith('$')) rawPrice = '$' + parseFloat(rawPrice).toFixed(2);
+
+    // Format date as M/D/YYYY
+    const rawDate = document.getElementById('newDate').value; // YYYY-MM-DD from date input
+    let formattedDate = rawDate;
+    if (rawDate) {
+        const [y, m, d] = rawDate.split('-');
+        formattedDate = `${parseInt(m)}/${parseInt(d)}/${y}`;
+    }
+
     const burger = {
         restaurant: document.getElementById('newRestaurant').value,
         description: document.getElementById('newDescription').value,
-        price: document.getElementById('newPrice').value,
+        price: rawPrice,
         location: document.getElementById('newLocation').value,
-        date_of_visit: document.getElementById('newDate').value,
+        date_of_visit: formattedDate,
         lat: selectedAddressData.lat,
         lng: selectedAddressData.lon,
     };
@@ -927,26 +1026,12 @@ async function handleAddBurger() {
             date_of_visit: burger.date_of_visit,
         });
 
-        // Add coords to local map so it shows up immediately
+        // Add coords so map can find the new address
         const addrKey = burger.location.toLowerCase().trim();
         ADDRESS_COORDS[addrKey] = [burger.lat, burger.lng];
 
         msg.textContent = 'Burger added to the rankings!';
         msg.className = 'form-message success';
-
-        // Add to both dropdowns
-        const value = `${burger.restaurant} ||| ${burger.description}`;
-        const shortDesc = burger.description.length > 50
-            ? burger.description.substring(0, 50) + '...' : burger.description;
-        const label = `${burger.restaurant} — ${shortDesc}`;
-
-        [document.getElementById('activateBurgerSelect'),
-         document.getElementById('galleryBurgerSelect')].filter(Boolean).forEach(select => {
-            const opt = document.createElement('option');
-            opt.value = value;
-            opt.textContent = label;
-            select.appendChild(opt);
-        });
 
         // Reset form
         document.getElementById('newRestaurant').value = '';
@@ -954,6 +1039,11 @@ async function handleAddBurger() {
         document.getElementById('newPrice').value = '';
         document.getElementById('newDate').value = '';
         clearAddressSelection();
+
+        // Reload everything so new burger appears in table, map, dropdowns
+        await loadRankings();
+        rebuildMap();
+        loadAdminData();
     } catch (err) {
         console.error('Add burger error:', err);
         msg.textContent = 'Failed to add burger: ' + err.message;
@@ -1065,26 +1155,19 @@ async function deletePhoto(id) {
     }
 }
 
-async function deleteBurger(ranking) {
-    if (!confirm(`Delete burger #${ranking}? This cannot be undone.`)) return;
+async function deleteBurger(ranking, restaurant) {
+    // Double confirmation
+    if (!confirm(`Are you sure you want to delete #${ranking} ${restaurant}?`)) return;
+    if (!confirm(`FINAL WARNING: This will permanently delete #${ranking} ${restaurant}. Are you absolutely sure?`)) return;
 
     try {
         await dbDelete('results', 'ranking', ranking);
 
-        // Remove from local data and refresh
-        burgerData = burgerData.filter(r => r['Ranking'] !== String(ranking));
-        renderTable(burgerData);
-
-        // Repopulate dropdowns
-        const formSelect = document.getElementById('activateBurgerSelect');
-        const gallerySelect = document.getElementById('galleryBurgerSelect');
-        [formSelect, gallerySelect].filter(Boolean).forEach(select => {
-            select.innerHTML = '<option value="">-- Select a burger --</option>';
-        });
-        populateBurgerSelect();
-
+        // Reload everything
+        await loadRankings();
+        rebuildMap();
         loadAdminData();
-        alert('Burger deleted.');
+        alert('Burger deleted successfully.');
     } catch (err) {
         console.error('Delete burger error:', err);
         alert('Failed to delete burger: ' + err.message);
@@ -1132,6 +1215,22 @@ async function handleChangePassword() {
 function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function abbrevState(stateName) {
+    const states = {
+        'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
+        'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
+        'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
+        'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA',
+        'michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT',
+        'nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM',
+        'new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
+        'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
+        'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
+        'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
+    };
+    return states[stateName.toLowerCase()] || stateName;
 }
 
 async function hashPassword(password) {
