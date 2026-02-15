@@ -307,40 +307,24 @@ async function loadAttendeesData() {
             }
         });
 
-        // Add names from ratings (auto-populate for new submissions)
+        // Add names from ratings (auto-populate for ALL ratings regardless of label match)
+        // This ensures historical entries get their attendees populated
         ratings.forEach(r => {
             const burgerLabel = r.burger;
             const ranking = burgerToRanking[burgerLabel];
+
             if (!ranking) {
-                console.warn(`Rating found for unknown burger: "${burgerLabel}"`);
+                // Log unknown burgers for debugging, but continue
+                console.warn(`Rating found for burger with no matching label: "${burgerLabel}"`);
+                console.warn('Available burger labels:', Object.keys(burgerToRanking));
                 return;
             }
 
             if (!attendeesData[ranking]) attendeesData[ranking] = [];
 
             // Only add if not already in attendees list
-            if (!attendeesData[ranking].includes(r.name)) {
+            if (r.name && !attendeesData[ranking].includes(r.name)) {
                 attendeesData[ranking].push(r.name);
-            }
-        });
-
-        // For historical burgers with ratings but no explicit attendees, count unique raters
-        // This ensures historical entries show proper attendee counts
-        burgerData.forEach(row => {
-            const ranking = row['Ranking'];
-            const label = `${row['Restaurant']} — ${row['Description']}`;
-
-            // Count ratings for this burger
-            const burgerRatings = ratings.filter(r => r.burger === label);
-
-            // If we have ratings but no attendees, this is likely a historical burger
-            // Add the raters with "Unknown" placeholder if needed
-            if (burgerRatings.length > 0 && attendeesData[ranking].length === 0) {
-                burgerRatings.forEach(r => {
-                    if (r.name && !attendeesData[ranking].includes(r.name)) {
-                        attendeesData[ranking].push(r.name);
-                    }
-                });
             }
         });
 
