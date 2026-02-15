@@ -602,7 +602,7 @@ async function updateBurgerRating(burgerLabel) {
         const overallAvg = ((avgToppings + avgBun + avgDoneness + avgFlavor) / 4).toFixed(2);
 
         // Parse the burger label to get restaurant and description
-        const parts = burgerLabel.split(' — ');
+        const parts = burgerLabel.split(' \u2014 ');
         const restaurant = parts[0];
         const description = parts.length > 1 ? parts[1] : '';
 
@@ -613,13 +613,48 @@ async function updateBurgerRating(burgerLabel) {
         if (results && results.length > 0) {
             const result = results[0];
             await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', result.ranking);
-
-            // Reload the rankings table and map to show updated rating
-            await loadRankings();
-            rebuildMap();
         }
+
+        // Recalculate ALL rankings based on burger_rating (highest = #1)
+        await recalculateRankings();
+
+        // Reload the rankings table and map to show updated rating
+        await loadRankings();
+        rebuildMap();
     } catch (err) {
         console.error('Update burger rating error:', err);
+    }
+}
+
+async function recalculateRankings() {
+    try {
+        // Get all results
+        const all = await dbSelect('results', 'select=*');
+        if (!all || all.length === 0) return;
+
+        // Separate rated and unrated
+        const rated = all.filter(r => r.burger_rating !== null && r.burger_rating !== undefined);
+        const unrated = all.filter(r => r.burger_rating === null || r.burger_rating === undefined);
+
+        // Sort rated by rating descending (highest rating = rank #1)
+        rated.sort((a, b) => parseFloat(b.burger_rating) - parseFloat(a.burger_rating));
+
+        // Assign rankings: rated first, then unrated at the end
+        let rank = 1;
+        for (const entry of rated) {
+            if (entry.ranking !== rank) {
+                await dbUpdate('results', { ranking: rank }, 'id', entry.id);
+            }
+            rank++;
+        }
+        for (const entry of unrated) {
+            if (entry.ranking !== rank) {
+                await dbUpdate('results', { ranking: rank }, 'id', entry.id);
+            }
+            rank++;
+        }
+    } catch (err) {
+        console.error('Recalculate rankings error:', err);
     }
 }
 
