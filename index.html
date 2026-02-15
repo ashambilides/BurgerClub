@@ -197,6 +197,12 @@
                     </div>
                     <button class="btn btn-primary" id="addBurgerBtn">Add Burger</button>
                     <p id="addBurgerMsg" class="form-message"></p>
+
+                    <h3 style="margin-top:24px;">Existing Burgers</h3>
+                    <p style="color:#999;font-size:0.85em;margin-bottom:8px;">Click the &times; to delete an entry.</p>
+                    <div id="adminBurgerList" class="admin-burger-list">
+                        <p style="color:#999;">Loading...</p>
+                    </div>
                 </div>
 
                 <!-- Form Control Tab -->
@@ -262,13 +268,6 @@
                     </div>
                     <button class="btn btn-primary" id="changePasswordBtn">Change Password</button>
                     <p id="changePasswordMsg" class="form-message"></p>
-
-                    <h3 style="margin-top:20px;">Supabase Config</h3>
-                    <p class="config-note">These are stored in config.js. Update them there if needed.</p>
-                    <div class="form-group">
-                        <label>Project URL</label>
-                        <input type="text" readonly id="showSupabaseUrl" class="readonly-input">
-                    </div>
                 </div>
             </div>
         </div>
@@ -280,7 +279,7 @@
     </footer>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.js?v=6"></script>
-    <script src="app.js?v=6"></script>
+    <script src="config.js?v=7"></script>
+    <script src="app.js?v=7"></script>
 </body>
 </html>

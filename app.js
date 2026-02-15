@@ -324,7 +324,6 @@ function initMap() {
             const burgersHtml = entries.map(row => `
                 <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #eee;">
                     <div class="popup-rating">${escapeHtml(row['Burger Rating'])}</div>
-                    <div><strong>${escapeHtml(row['Restaurant'])}</strong></div>
                     <div class="popup-detail">${escapeHtml(row['Description'])}</div>
                     <div class="popup-detail">${escapeHtml(row['Price'])} · ${escapeHtml(row['Date of Visit'])}</div>
                 </div>
@@ -609,7 +608,6 @@ async function handleAdminLogin() {
         errorEl.textContent = '';
         document.getElementById('adminLogin').style.display = 'none';
         document.getElementById('adminContent').style.display = 'block';
-        document.getElementById('showSupabaseUrl').value = CONFIG.SUPABASE_URL;
         loadAdminData();
     } else {
         errorEl.textContent = 'Incorrect password.';
@@ -636,16 +634,53 @@ async function loadAdminData() {
     }
 
     try {
-        const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc&limit=50');
+        const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc&limit=100');
         const ratingsDiv = document.getElementById('submittedRatings');
         if (ratings && ratings.length > 0) {
-            ratingsDiv.innerHTML = ratings.map(r => `
-                <div class="rating-entry">
-                    <strong>${escapeHtml(r.name)}</strong> rated <strong>${escapeHtml(r.burger)}</strong><br>
-                    Toppings: ${r.toppings} | Bun: ${r.bun} | Doneness: ${r.doneness} | Flavor: ${r.flavor}<br>
-                    <small style="color:#999;">${new Date(r.created_at).toLocaleString()}</small>
-                </div>
-            `).join('');
+            // Group by burger for summary
+            const byBurger = {};
+            ratings.forEach(r => {
+                const key = r.burger || 'Unknown';
+                if (!byBurger[key]) byBurger[key] = [];
+                byBurger[key].push(r);
+            });
+
+            let html = '';
+            for (const [burger, entries] of Object.entries(byBurger)) {
+                const avgT = (entries.reduce((s, r) => s + (r.toppings || 0), 0) / entries.length).toFixed(1);
+                const avgB = (entries.reduce((s, r) => s + (r.bun || 0), 0) / entries.length).toFixed(1);
+                const avgD = (entries.reduce((s, r) => s + (r.doneness || 0), 0) / entries.length).toFixed(1);
+                const avgF = (entries.reduce((s, r) => s + (r.flavor || 0), 0) / entries.length).toFixed(1);
+                const avgAll = ((parseFloat(avgT) + parseFloat(avgB) + parseFloat(avgD) + parseFloat(avgF)) / 4).toFixed(2);
+
+                html += `
+                    <div class="ratings-burger-group">
+                        <div class="ratings-burger-header">
+                            <strong>${escapeHtml(burger)}</strong>
+                            <span class="ratings-avg">Avg: ${avgAll} (${entries.length} vote${entries.length > 1 ? 's' : ''})</span>
+                        </div>
+                        <div class="ratings-summary">Toppings: ${avgT} | Bun: ${avgB} | Doneness: ${avgD} | Flavor: ${avgF}</div>
+                        <table class="ratings-table">
+                            <thead><tr><th>Name</th><th>Toppings</th><th>Bun</th><th>Doneness</th><th>Flavor</th><th>Avg</th><th>Date</th></tr></thead>
+                            <tbody>
+                                ${entries.map(r => {
+                                    const rowAvg = ((r.toppings + r.bun + r.doneness + r.flavor) / 4).toFixed(1);
+                                    return `<tr>
+                                        <td>${escapeHtml(r.name)}</td>
+                                        <td>${r.toppings}</td>
+                                        <td>${r.bun}</td>
+                                        <td>${r.doneness}</td>
+                                        <td>${r.flavor}</td>
+                                        <td><strong>${rowAvg}</strong></td>
+                                        <td>${new Date(r.created_at).toLocaleDateString()}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+            ratingsDiv.innerHTML = html;
         } else {
             ratingsDiv.innerHTML = '<p style="color:#999;">No ratings submitted yet.</p>';
         }
@@ -669,6 +704,29 @@ async function loadAdminData() {
     } catch (e) {
         console.error('Load gallery admin error:', e);
     }
+
+    // Populate existing burgers list with delete buttons
+    try {
+        const burgerListDiv = document.getElementById('adminBurgerList');
+        if (burgerData.length > 0) {
+            const sorted = [...burgerData].sort((a, b) =>
+                (a['Restaurant'] || '').localeCompare(b['Restaurant'] || ''));
+            burgerListDiv.innerHTML = sorted.map(row => `
+                <div class="admin-burger-entry">
+                    <div class="admin-burger-info">
+                        <strong>#${escapeHtml(row['Ranking'])} ${escapeHtml(row['Restaurant'])}</strong>
+                        <span class="admin-burger-desc">${escapeHtml(row['Description'])}</span>
+                        <span class="admin-burger-meta">${escapeHtml(row['Price'])} · ${escapeHtml(row['Location'])} · ${escapeHtml(row['Date of Visit'])}</span>
+                    </div>
+                    <button class="btn-delete-burger" onclick="deleteBurger(${escapeHtml(row['Ranking'])})" title="Delete this burger">&times;</button>
+                </div>
+            `).join('');
+        } else {
+            burgerListDiv.innerHTML = '<p style="color:#999;">No burgers yet.</p>';
+        }
+    } catch (e) {
+        console.error('Load burger list error:', e);
+    }
 }
 
 function populateBurgerSelect() {
@@ -678,15 +736,21 @@ function populateBurgerSelect() {
 
     const selects = [formSelect, gallerySelect].filter(Boolean);
 
-    burgerData.forEach(row => {
+    // Build options sorted alphabetically by restaurant then description
+    const options = burgerData.map(row => {
         const restaurant = row['Restaurant'] || '';
         const desc = row['Description'] || '';
-        // Truncate description for readability
         const shortDesc = desc.length > 50 ? desc.substring(0, 50) + '...' : desc;
-        const label = `${restaurant} — ${shortDesc}`;
-        // Value is "Restaurant ||| Description" so we can identify uniquely
-        const value = `${restaurant} ||| ${desc}`;
+        return {
+            label: `${restaurant} — ${shortDesc}`,
+            value: `${restaurant} ||| ${desc}`,
+            sortKey: restaurant.toLowerCase() + ' ' + desc.toLowerCase(),
+        };
+    });
 
+    options.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+    options.forEach(({ label, value }) => {
         selects.forEach(select => {
             const opt = document.createElement('option');
             opt.value = value;
@@ -998,6 +1062,32 @@ async function deletePhoto(id) {
     } catch (err) {
         console.error('Delete photo error:', err);
         alert('Failed to delete photo.');
+    }
+}
+
+async function deleteBurger(ranking) {
+    if (!confirm(`Delete burger #${ranking}? This cannot be undone.`)) return;
+
+    try {
+        await dbDelete('results', 'ranking', ranking);
+
+        // Remove from local data and refresh
+        burgerData = burgerData.filter(r => r['Ranking'] !== String(ranking));
+        renderTable(burgerData);
+
+        // Repopulate dropdowns
+        const formSelect = document.getElementById('activateBurgerSelect');
+        const gallerySelect = document.getElementById('galleryBurgerSelect');
+        [formSelect, gallerySelect].filter(Boolean).forEach(select => {
+            select.innerHTML = '<option value="">-- Select a burger --</option>';
+        });
+        populateBurgerSelect();
+
+        loadAdminData();
+        alert('Burger deleted.');
+    } catch (err) {
+        console.error('Delete burger error:', err);
+        alert('Failed to delete burger: ' + err.message);
     }
 }
 

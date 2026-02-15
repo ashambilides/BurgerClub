@@ -806,15 +806,136 @@ tr:nth-child(even):hover td {
     color: var(--red);
 }
 
-.config-note {
-    color: var(--text-muted);
-    font-size: 0.85em;
-    margin-bottom: 12px;
+/* Admin Burger List */
+.admin-burger-list {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
 }
 
-.readonly-input {
-    background: var(--bg) !important;
-    color: var(--text-muted) !important;
+.admin-burger-entry {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.admin-burger-entry:last-child {
+    border-bottom: none;
+}
+
+.admin-burger-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-burger-info strong {
+    color: var(--red);
+    display: block;
+    font-size: 0.9em;
+}
+
+.admin-burger-desc {
+    display: block;
+    font-size: 0.8em;
+    color: var(--text);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.admin-burger-meta {
+    display: block;
+    font-size: 0.75em;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.btn-delete-burger {
+    background: var(--red);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    font-size: 1em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 4px;
+    transition: background var(--transition);
+}
+
+.btn-delete-burger:hover {
+    background: var(--red-dark);
+}
+
+/* Admin Ratings Table */
+.ratings-burger-group {
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: white;
+}
+
+.ratings-burger-header {
+    background: var(--bg);
+    padding: 10px 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.ratings-burger-header strong {
+    color: var(--red);
+    font-size: 0.95em;
+}
+
+.ratings-avg {
+    font-size: 0.85em;
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+.ratings-summary {
+    padding: 6px 12px;
+    font-size: 0.8em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: #fafafa;
+}
+
+.ratings-table {
+    width: 100%;
+    font-size: 0.8em;
+    border-collapse: collapse;
+}
+
+.ratings-table th {
+    background: var(--bg);
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-light);
+    border-bottom: 1px solid var(--border);
+}
+
+.ratings-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.ratings-table tr:last-child td {
+    border-bottom: none;
 }
 
 /* Address Search */
