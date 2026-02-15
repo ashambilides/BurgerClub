@@ -784,8 +784,7 @@ async function loadAdminData() {
 
             if (filteredRatings.length === 0) {
                 ratingsDiv.innerHTML = '<p style="color:#999;">No ratings for current burgers.</p>';
-                return;
-            }
+            } else {
 
             // Group by burger for summary
             const byBurger = {};
@@ -867,6 +866,7 @@ async function loadAdminData() {
             // Add event listeners for search and sort
             document.getElementById('ratingsSearch').addEventListener('input', filterRatings);
             document.getElementById('ratingsSort').addEventListener('change', sortRatings);
+            } // end else (filteredRatings.length > 0)
         } else {
             ratingsDiv.innerHTML = '<p style="color:#999;">No ratings submitted yet.</p>';
         }
@@ -1216,7 +1216,6 @@ async function handleGalleryUpload() {
     const msg = document.getElementById('galleryUploadMsg');
     const files = document.getElementById('galleryPhoto').files;
     const burgerValue = document.getElementById('galleryBurgerSelect').value;
-    const caption = document.getElementById('galleryCaption').value;
 
     // Parse "Restaurant ||| Description"
     const [restaurant, burgerDesc] = burgerValue ? burgerValue.split(' ||| ') : ['', ''];
@@ -1250,7 +1249,7 @@ async function handleGalleryUpload() {
             await dbInsert('gallery', {
                 url: publicUrl,
                 restaurant: restaurant || '',
-                caption: caption || (burgerDesc ? burgerDesc.substring(0, 80) : ''),
+                caption: burgerDesc ? burgerDesc.substring(0, 80) : '',
             });
         }
 
@@ -1286,6 +1285,9 @@ async function deleteBurger(ranking, restaurant) {
 
     try {
         await dbDelete('results', 'ranking', ranking);
+
+        // Recalculate rankings so there are no gaps (1, 2, 3... not 2, 3, 5...)
+        await recalculateRankings();
 
         // Reload everything
         await loadRankings();
