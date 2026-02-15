@@ -666,12 +666,9 @@ async function handleFormSubmit(e) {
         await dbInsert('ratings', rating);
 
         // Add attendee automatically
-        const burgerToRanking = {};
-        burgerData.forEach(row => {
-            const label = `${row['Restaurant']} — ${row['Description']}`;
-            burgerToRanking[label] = row['Ranking'];
-        });
-        const ranking = burgerToRanking[config.active_burger];
+        // CRITICAL FIX: Use the ranking ID directly from form_config instead of label matching
+        // This prevents attendees being routed to wrong burgers when labels don't match
+        const ranking = config.active_burger_ranking;
         if (ranking) {
             try {
                 await dbInsert('attendees', {
@@ -681,6 +678,26 @@ async function handleFormSubmit(e) {
                 });
             } catch (attendeeErr) {
                 console.error('Failed to add attendee:', attendeeErr);
+            }
+        } else {
+            // Fallback: If active_burger_ranking is not set (old data), try label matching
+            console.warn('active_burger_ranking not found, using fallback label matching');
+            const burgerToRanking = {};
+            burgerData.forEach(row => {
+                const label = `${row['Restaurant']} — ${row['Description']}`;
+                burgerToRanking[label] = row['Ranking'];
+            });
+            const fallbackRanking = burgerToRanking[config.active_burger];
+            if (fallbackRanking) {
+                try {
+                    await dbInsert('attendees', {
+                        burger_id: parseInt(fallbackRanking),
+                        name: rating.name,
+                        rating_id: null,
+                    });
+                } catch (attendeeErr) {
+                    console.error('Failed to add attendee (fallback):', attendeeErr);
+                }
             }
         }
 
@@ -1326,8 +1343,18 @@ async function handleFormControl(open) {
         const update = { is_open: open };
         if (open) {
             update.active_burger = burgerLabel;
+
+            // CRITICAL FIX: Store the ranking ID to prevent attendee routing bugs
+            // Find the exact burger in burgerData using the full description (not truncated)
+            const selectedBurger = burgerData.find(b =>
+                b['Restaurant'] === burgerRestaurant && b['Description'] === burgerDesc
+            );
+            if (selectedBurger) {
+                update.active_burger_ranking = parseInt(selectedBurger['Ranking']);
+            }
         } else {
             update.active_burger = null;
+            update.active_burger_ranking = null;
         }
 
         await dbUpdate('form_config', update, 'id', 1);
