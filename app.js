@@ -101,6 +101,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadGallery().catch(e => console.error('Gallery load failed:', e));
     checkFormStatus().catch(e => console.error('Form status check failed:', e));
     initSuggestionForm();
+    loadMainAttendanceTracker().catch(e => console.error('Main tracker load failed:', e));
 });
 
 // ============================================
@@ -2047,4 +2048,182 @@ function compareAttendance() {
             ` : ''}
         </div>
     `;
+}
+// ============================================
+// MAIN PAGE ATTENDANCE TRACKER
+// ============================================
+
+async function loadMainAttendanceTracker() {
+    const individualSelect = document.getElementById('mainTrackerMemberSelect');
+    const memberSelects = document.querySelectorAll('.tracker-member-select');
+
+    if (!individualSelect) return;
+
+    await loadAttendeesData();
+
+    // Get all unique names
+    const allNames = new Set();
+    Object.values(attendeesData).forEach(names => {
+        names.forEach(n => allNames.add(n));
+    });
+
+    const sorted = Array.from(allNames).sort();
+
+    // Populate individual member select
+    individualSelect.innerHTML = '<option value="">-- Select a member --</option>' +
+        sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+
+    // Populate all comparison selects
+    memberSelects.forEach((sel, index) => {
+        const placeholder = index < 2 ? `-- Member ${index + 1} --` : `-- Member ${index + 1} (optional) --`;
+        sel.innerHTML = `<option value="">${placeholder}</option>` +
+            sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    });
+
+    // Event listeners
+    individualSelect.addEventListener('change', showMainIndividualAttendance);
+    document.getElementById('mainTrackerCompareBtn')?.addEventListener('click', compareMainAttendance);
+}
+
+function showMainIndividualAttendance() {
+    const name = document.getElementById('mainTrackerMemberSelect').value;
+    const resultsDiv = document.getElementById('mainTrackerIndividualResults');
+
+    if (!name) {
+        resultsDiv.innerHTML = '';
+        return;
+    }
+
+    const attended = [];
+    for (const [ranking, names] of Object.entries(attendeesData)) {
+        if (names.includes(name)) {
+            const burger = burgerData.find(b => b['Ranking'] == ranking);
+            if (burger) attended.push(burger);
+        }
+    }
+
+    if (attended.length === 0) {
+        resultsDiv.innerHTML = `<p style="color:#999;margin-top:12px;">${escapeHtml(name)} hasn't attended any burgers yet.</p>`;
+        return;
+    }
+
+    resultsDiv.innerHTML = `
+        <div style="background:var(--bg);padding:20px;border-radius:8px;margin-top:12px;">
+            <h3 style="margin-bottom:12px;color:var(--red);">${escapeHtml(name)} - ${attended.length} burger${attended.length !== 1 ? 's' : ''}</h3>
+            <div style="display:grid;gap:8px;">
+                ${attended.map(b => `
+                    <div style="padding:10px;background:white;border-radius:6px;border-left:4px solid var(--red);">
+                        <strong>#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</strong>
+                        <div style="color:#666;font-size:0.9em;margin-top:4px;">${escapeHtml(b['Description'])}</div>
+                        <div style="color:#999;font-size:0.85em;margin-top:4px;">Rating: ${escapeHtml(b['Burger Rating']) || 'Not rated'} | ${escapeHtml(b['Date of Visit'])}</div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function compareMainAttendance() {
+    const memberSelects = document.querySelectorAll('.tracker-member-select');
+    const resultsDiv = document.getElementById('mainTrackerComparisonResults');
+
+    // Get selected members
+    const selectedMembers = Array.from(memberSelects)
+        .map(sel => sel.value)
+        .filter(v => v !== '');
+
+    if (selectedMembers.length < 2) {
+        alert('Please select at least 2 members to compare.');
+        return;
+    }
+
+    // Get attendance for each selected member
+    const memberAttendance = {};
+    selectedMembers.forEach(name => {
+        memberAttendance[name] = [];
+        for (const [ranking, names] of Object.entries(attendeesData)) {
+            if (names.includes(name)) {
+                const burger = burgerData.find(b => b['Ranking'] == ranking);
+                if (burger) memberAttendance[name].push(burger);
+            }
+        }
+    });
+
+    // Find burgers attended by all selected members
+    const attendedByAll = memberAttendance[selectedMembers[0]].filter(burger => {
+        return selectedMembers.every(member =>
+            memberAttendance[member].some(b => b['Ranking'] === burger['Ranking'])
+        );
+    });
+
+    // Find unique burgers per member
+    const uniquePerMember = {};
+    selectedMembers.forEach(member => {
+        uniquePerMember[member] = memberAttendance[member].filter(burger => {
+            // Only this member attended
+            return selectedMembers.filter(m =>
+                memberAttendance[m].some(b => b['Ranking'] === burger['Ranking'])
+            ).length === 1;
+        });
+    });
+
+    // Build results HTML
+    let html = `
+        <div style="background:var(--bg);padding:20px;border-radius:8px;margin-top:16px;">
+            <h3 style="color:var(--red);margin-bottom:16px;">Comparison Results</h3>
+
+            <!-- Summary -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px;">
+                ${selectedMembers.map(name => `
+                    <div style="background:white;padding:12px;border-radius:6px;text-align:center;">
+                        <div style="font-weight:700;color:var(--red);">${memberAttendance[name].length}</div>
+                        <div style="font-size:0.9em;color:#666;">${escapeHtml(name)}</div>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div style="background:white;padding:12px;border-radius:6px;text-align:center;margin-bottom:20px;">
+                <div style="font-weight:700;color:var(--red);">${attendedByAll.length}</div>
+                <div style="font-size:0.9em;color:#666;">Attended by all ${selectedMembers.length} members</div>
+            </div>
+    `;
+
+    // Attended by all
+    if (attendedByAll.length > 0) {
+        html += `
+            <div style="margin-bottom:20px;">
+                <h4 style="margin-bottom:10px;">Attended by All</h4>
+                <div style="display:grid;gap:8px;">
+                    ${attendedByAll.map(b => `
+                        <div style="padding:10px;background:#e8f5e9;border-radius:6px;border-left:4px solid #4caf50;">
+                            <strong>#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</strong>
+                            <div style="font-size:0.9em;color:#666;margin-top:4px;">${escapeHtml(b['Description'])}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    // Unique per member
+    selectedMembers.forEach(member => {
+        if (uniquePerMember[member].length > 0) {
+            html += `
+                <div style="margin-bottom:20px;">
+                    <h4 style="margin-bottom:10px;">Only ${escapeHtml(member)} (${uniquePerMember[member].length})</h4>
+                    <div style="display:grid;gap:8px;">
+                        ${uniquePerMember[member].map(b => `
+                            <div style="padding:10px;background:white;border-radius:6px;border-left:4px solid var(--red);">
+                                <strong>#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</strong>
+                                <div style="font-size:0.9em;color:#666;margin-top:4px;">${escapeHtml(b['Description'])}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+    });
+
+    html += '</div>';
+    resultsDiv.innerHTML = html;
 }
