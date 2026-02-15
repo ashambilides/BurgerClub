@@ -314,9 +314,7 @@ async function loadAttendeesData() {
             const ranking = burgerToRanking[burgerLabel];
 
             if (!ranking) {
-                // Log unknown burgers for debugging, but continue
-                console.warn(`Rating found for burger with no matching label: "${burgerLabel}"`);
-                console.warn('Available burger labels:', Object.keys(burgerToRanking));
+                // Skip unknown burgers (like deleted test burgers)
                 return;
             }
 
@@ -325,6 +323,24 @@ async function loadAttendeesData() {
             // Only add if not already in attendees list
             if (r.name && !attendeesData[ranking].includes(r.name)) {
                 attendeesData[ranking].push(r.name);
+            }
+        });
+
+        // Debug: Log which burgers have zero attendees after loading from ratings
+        console.log('=== ATTENDEE DEBUG ===');
+        burgerData.forEach(row => {
+            const ranking = row['Ranking'];
+            const label = `${row['Restaurant']} — ${row['Description']}`;
+            const count = attendeesData[ranking]?.length || 0;
+            const ratingsForBurger = ratings.filter(r => r.burger === label);
+
+            if (count === 0 && ratingsForBurger.length > 0) {
+                console.warn(`❌ Burger #${ranking} has ${ratingsForBurger.length} ratings but 0 attendees: "${label}"`);
+                console.log('   Ratings in DB:', ratingsForBurger.map(r => ({burger: r.burger, name: r.name})));
+            } else if (count === 0) {
+                console.log(`⚪ Burger #${ranking} has no ratings and no attendees: "${label}"`);
+            } else {
+                console.log(`✅ Burger #${ranking} has ${count} attendees: "${label}"`);
             }
         });
 
