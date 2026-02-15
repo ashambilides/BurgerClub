@@ -700,7 +700,7 @@ async function loadAdminData() {
                 <p>Status: <span class="${config.is_open ? 'status-open' : 'status-closed'}">
                     ${config.is_open ? 'OPEN' : 'CLOSED'}
                 </span></p>
-                ${config.active_burger ? `<p>Active burger: <strong>${escapeHtml(config.active_burger)}</strong></p>` : ''}
+                ${config.is_open && config.active_burger ? `<p>Active burger: <strong>${escapeHtml(config.active_burger)}</strong></p>` : ''}
             `;
         }
     } catch (e) {
@@ -804,8 +804,9 @@ async function loadAdminData() {
         console.error('Load burger list error:', e);
     }
 
-    // Load suggestions
+    // Load suggestions and requests
     loadSuggestions();
+    loadRequests();
 }
 
 function populateBurgerSelect() {
@@ -1077,7 +1078,11 @@ async function handleFormControl(open) {
 
     try {
         const update = { is_open: open };
-        if (open) update.active_burger = burgerLabel;
+        if (open) {
+            update.active_burger = burgerLabel;
+        } else {
+            update.active_burger = null;
+        }
 
         await dbUpdate('form_config', update, 'id', 1);
 
@@ -1218,8 +1223,10 @@ async function handleChangePassword() {
 
 function initSuggestionForm() {
     const form = document.getElementById('suggestionForm');
-    if (!form) return;
-    form.addEventListener('submit', handleSuggestionSubmit);
+    if (form) form.addEventListener('submit', handleSuggestionSubmit);
+
+    const requestForm = document.getElementById('requestForm');
+    if (requestForm) requestForm.addEventListener('submit', handleRequestSubmit);
 }
 
 async function handleSuggestionSubmit(e) {
@@ -1314,6 +1321,105 @@ async function toggleSuggestion(id, addressed) {
     } catch (err) {
         console.error('Toggle suggestion error:', err);
         alert('Failed to update suggestion.');
+    }
+}
+
+// ============================================
+// RESTAURANT REQUESTS
+// ============================================
+
+async function handleRequestSubmit(e) {
+    e.preventDefault();
+    const msg = document.getElementById('requestMessage');
+    const btn = document.getElementById('requestBtn');
+    const name = document.getElementById('requestName').value.trim();
+    const text = document.getElementById('requestText').value.trim();
+
+    if (!name || !text) {
+        msg.textContent = 'Please fill in both fields.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    if (!isConfigured()) {
+        msg.textContent = 'Database not configured.';
+        msg.className = 'form-message error';
+        return;
+    }
+
+    btn.disabled = true;
+    msg.textContent = 'Submitting...';
+    msg.className = 'form-message';
+
+    try {
+        await dbInsert('restaurant_requests', {
+            name: name,
+            request: text,
+        });
+        msg.textContent = 'Thanks for the request!';
+        msg.className = 'form-message success';
+        document.getElementById('requestName').value = '';
+        document.getElementById('requestText').value = '';
+    } catch (err) {
+        console.error('Request submit error:', err);
+        msg.textContent = 'Failed to submit. Please try again.';
+        msg.className = 'form-message error';
+    }
+    btn.disabled = false;
+}
+
+async function loadRequests() {
+    const listDiv = document.getElementById('adminRequestsList');
+    if (!listDiv) return;
+
+    try {
+        const data = await dbSelect('restaurant_requests', 'select=*&order=created_at.desc');
+
+        if (!data || data.length === 0) {
+            listDiv.innerHTML = '<p style="color:#999;">No restaurant requests yet.</p>';
+            return;
+        }
+
+        listDiv.innerHTML = data.map(s => {
+            const created = new Date(s.created_at).toLocaleString();
+            const addressedHtml = s.addressed
+                ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
+                : '';
+            return `
+                <div class="suggestion-entry ${s.addressed ? 'addressed' : ''}">
+                    <div class="suggestion-check">
+                        <input type="checkbox" ${s.addressed ? 'checked' : ''}
+                            onchange="toggleRequest(${s.id}, this.checked)"
+                            title="${s.addressed ? 'Mark as unaddressed' : 'Mark as addressed'}">
+                    </div>
+                    <div class="suggestion-content">
+                        <div class="suggestion-header">
+                            <strong>${escapeHtml(s.name)}</strong>
+                            <span class="suggestion-date">${created}</span>
+                        </div>
+                        <div class="suggestion-text">${escapeHtml(s.request)}</div>
+                        ${addressedHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (err) {
+        console.error('Load requests error:', err);
+        listDiv.innerHTML = '<p style="color:#999;">Could not load requests.</p>';
+    }
+}
+
+async function toggleRequest(id, addressed) {
+    try {
+        const update = {
+            addressed: addressed,
+            addressed_at: addressed ? new Date().toISOString() : null,
+        };
+        await dbUpdate('restaurant_requests', update, 'id', id);
+        loadRequests();
+    } catch (err) {
+        console.error('Toggle request error:', err);
+        alert('Failed to update request.');
     }
 }
 

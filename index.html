@@ -18,7 +18,7 @@
             <a href="#map" class="nav-link">Map</a>
             <a href="#gallery" class="nav-link">Gallery</a>
             <a href="#rate" class="nav-link">Rate</a>
-            <a href="#suggestions" class="nav-link">Suggest</a>
+            <a href="#suggestions" class="nav-link">Feedback</a>
             <a href="#" class="nav-link admin-toggle" id="adminToggle">Admin</a>
         </div>
         <button class="nav-hamburger" id="hamburger" aria-label="Menu">
@@ -33,7 +33,7 @@
         <a href="#map" class="mobile-link">Map</a>
         <a href="#gallery" class="mobile-link">Gallery</a>
         <a href="#rate" class="mobile-link">Rate</a>
-        <a href="#suggestions" class="mobile-link">Suggest</a>
+        <a href="#suggestions" class="mobile-link">Feedback</a>
         <a href="#" class="mobile-link admin-toggle" id="adminToggleMobile">Admin</a>
     </div>
 
@@ -139,22 +139,44 @@
         </form>
     </section>
 
-    <!-- Suggestions Section -->
+    <!-- Feedback Section -->
     <section id="suggestions" class="section">
-        <h2 class="section-title">Suggest a Spot</h2>
-        <p class="section-desc">Know a burger joint we should try? Let us know!</p>
-        <form id="suggestionForm" class="suggestion-form">
-            <div class="form-group">
-                <label for="suggestName">Your Name *</label>
-                <input type="text" id="suggestName" required placeholder="Enter your name">
+        <h2 class="section-title">Have Feedback?</h2>
+        <p class="section-desc">Request a restaurant or share ideas to make the club better.</p>
+        <div class="feedback-grid">
+            <div class="feedback-card">
+                <h3 class="feedback-card-title">Restaurant Request</h3>
+                <p class="feedback-card-desc">Know a burger joint we should try?</p>
+                <form id="requestForm" class="suggestion-form">
+                    <div class="form-group">
+                        <label for="requestName">Your Name *</label>
+                        <input type="text" id="requestName" required placeholder="Enter your name">
+                    </div>
+                    <div class="form-group">
+                        <label for="requestText">Restaurant &amp; Details *</label>
+                        <textarea id="requestText" required placeholder="Restaurant name, location, what to order..." rows="3"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="requestBtn">Submit Request</button>
+                    <div id="requestMessage" class="form-message"></div>
+                </form>
             </div>
-            <div class="form-group">
-                <label for="suggestText">Suggestion *</label>
-                <textarea id="suggestText" required placeholder="Tell us about the burger spot — name, location, what to order..." rows="4"></textarea>
+            <div class="feedback-card">
+                <h3 class="feedback-card-title">Suggestions for Improvement</h3>
+                <p class="feedback-card-desc">Ideas to make the club or website better?</p>
+                <form id="suggestionForm" class="suggestion-form">
+                    <div class="form-group">
+                        <label for="suggestName">Your Name *</label>
+                        <input type="text" id="suggestName" required placeholder="Enter your name">
+                    </div>
+                    <div class="form-group">
+                        <label for="suggestText">Your Suggestion *</label>
+                        <textarea id="suggestText" required placeholder="How can we improve the club or this website?" rows="3"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="suggestBtn">Submit Suggestion</button>
+                    <div id="suggestMessage" class="form-message"></div>
+                </form>
             </div>
-            <button type="submit" class="btn btn-primary" id="suggestBtn">Submit Suggestion</button>
-            <div id="suggestMessage" class="form-message"></div>
-        </form>
+        </div>
     </section>
 
     <!-- Admin Panel -->
@@ -181,6 +203,7 @@
                     <button class="admin-tab active" data-tab="manageBurger">Manage Burger</button>
                     <button class="admin-tab" data-tab="manageForm">Form Control</button>
                     <button class="admin-tab" data-tab="manageGallery">Gallery</button>
+                    <button class="admin-tab" data-tab="manageRequests">Requests</button>
                     <button class="admin-tab" data-tab="manageSuggestions">Suggestions</button>
                     <button class="admin-tab" data-tab="manageSettings">Settings</button>
                 </div>
@@ -279,9 +302,18 @@
                     </div>
                 </div>
 
+                <!-- Restaurant Requests Tab -->
+                <div class="admin-tab-content" id="tab-manageRequests">
+                    <h3>Restaurant Requests</h3>
+                    <p style="color:#999;font-size:0.85em;margin-bottom:12px;">Check the box to mark a request as addressed. Newest first.</p>
+                    <div id="adminRequestsList" class="admin-suggestions-list">
+                        <p style="color:#999;">Loading...</p>
+                    </div>
+                </div>
+
                 <!-- Suggestions Tab -->
                 <div class="admin-tab-content" id="tab-manageSuggestions">
-                    <h3>Suggestions</h3>
+                    <h3>Suggestions for Improvement</h3>
                     <p style="color:#999;font-size:0.85em;margin-bottom:12px;">Check the box to mark a suggestion as addressed. Newest first.</p>
                     <div id="adminSuggestionsList" class="admin-suggestions-list">
                         <p style="color:#999;">Loading...</p>
@@ -312,7 +344,7 @@
     </footer>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.js?v=9"></script>
-    <script src="app.js?v=9"></script>
+    <script src="config.js?v=10"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>

@@ -1058,16 +1058,48 @@ tr:nth-child(even):hover td {
 }
 
 /* ============================================
-   SUGGESTIONS
+   FEEDBACK / SUGGESTIONS / REQUESTS
    ============================================ */
 
-.suggestion-form {
-    max-width: 600px;
+.feedback-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    max-width: 900px;
     margin: 0 auto;
+}
+
+@media (max-width: 768px) {
+    .feedback-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.feedback-card {
     background: var(--bg-card);
     padding: 24px;
     border-radius: var(--radius);
     box-shadow: var(--shadow);
+}
+
+.feedback-card-title {
+    font-family: 'Roboto', sans-serif;
+    font-size: 1.1em;
+    color: var(--red);
+    margin-bottom: 4px;
+}
+
+.feedback-card-desc {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+.suggestion-form {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 0;
+    border-radius: var(--radius);
 }
 
 .suggestion-form textarea {
