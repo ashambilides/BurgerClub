@@ -812,23 +812,28 @@ function updateLightbox() {
     const photo = galleryPhotos[lightboxIndex];
     document.getElementById('lightboxImg').src = photo.url;
 
-    // Try to find the full description from burgerData (in case caption was truncated)
-    let description = photo.caption || '';
-    if (photo.restaurant && description) {
-        // Find burger(s) matching this restaurant, prefer one whose description starts with the caption
+    // Always try to look up the full description from burgerData
+    let description = '';
+    if (photo.restaurant) {
         const matches = burgerData.filter(b => b['Restaurant'] === photo.restaurant);
         if (matches.length === 1) {
             description = matches[0]['Description'];
         } else if (matches.length > 1) {
             // Multiple burgers at same restaurant — match by caption prefix
+            const captionText = (photo.caption || '').replace(/\.\.\.$/,'');
             const best = matches.find(b =>
-                b['Description'] && b['Description'].startsWith(description.replace(/\.\.\.$/,''))
+                b['Description'] && b['Description'].startsWith(captionText)
             );
             if (best) description = best['Description'];
         }
     }
+    // Fall back to caption if no match found (and caption isn't "Rated by...")
+    if (!description && photo.caption && !photo.caption.startsWith('Rated by')) {
+        description = photo.caption;
+    }
 
-    let caption = `${photo.restaurant || ''} ${description ? '— ' + description : ''}`.trim();
+    let caption = photo.restaurant || '';
+    if (description) caption += ' — ' + description;
     if (photo.uploaded_by) {
         caption += ` · Photo by ${photo.uploaded_by}`;
     }
