@@ -811,7 +811,24 @@ function navigateLightbox(dir) {
 function updateLightbox() {
     const photo = galleryPhotos[lightboxIndex];
     document.getElementById('lightboxImg').src = photo.url;
-    let caption = `${photo.restaurant || ''} ${photo.caption ? '— ' + photo.caption : ''}`.trim();
+
+    // Try to find the full description from burgerData (in case caption was truncated)
+    let description = photo.caption || '';
+    if (photo.restaurant && description) {
+        // Find burger(s) matching this restaurant, prefer one whose description starts with the caption
+        const matches = burgerData.filter(b => b['Restaurant'] === photo.restaurant);
+        if (matches.length === 1) {
+            description = matches[0]['Description'];
+        } else if (matches.length > 1) {
+            // Multiple burgers at same restaurant — match by caption prefix
+            const best = matches.find(b =>
+                b['Description'] && b['Description'].startsWith(description.replace(/\.\.\.$/,''))
+            );
+            if (best) description = best['Description'];
+        }
+    }
+
+    let caption = `${photo.restaurant || ''} ${description ? '— ' + description : ''}`.trim();
     if (photo.uploaded_by) {
         caption += ` · Photo by ${photo.uploaded_by}`;
     }
@@ -1744,7 +1761,7 @@ async function handleGalleryUpload() {
             await dbInsert('gallery', {
                 url: publicUrl,
                 restaurant: restaurant || '',
-                caption: burgerDesc ? burgerDesc.substring(0, 80) : '',
+                caption: burgerDesc || '',
                 uploaded_by: photographer || null,
             });
         }
