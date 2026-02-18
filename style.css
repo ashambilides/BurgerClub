@@ -415,6 +415,14 @@ tr:nth-child(even):hover td {
     font-size: 0.95em;
 }
 
+.gallery-item .gallery-caption .photo-credit {
+    display: block;
+    font-style: italic;
+    font-size: 0.85em;
+    opacity: 0.85;
+    margin-top: 2px;
+}
+
 .loading-text {
     text-align: center;
     color: var(--text-muted);

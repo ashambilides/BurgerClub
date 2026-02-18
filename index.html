@@ -6,7 +6,7 @@
     <title>Burger of the Month Club</title>
     <link href="https://fonts.googleapis.com/css2?family=Lobster&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="style.css?v=23" />
+    <link rel="stylesheet" href="style.css?v=24" />
 </head>
 <body>
     <!-- Navigation -->
@@ -122,8 +122,15 @@
         <form id="ratingForm" class="rating-form" style="display:none;">
             <div class="form-current-burger" id="currentBurgerInfo"></div>
             <div class="form-group">
-                <label for="raterName">Your Name *</label>
-                <input type="text" id="raterName" required placeholder="Enter your name">
+                <label for="raterNameSelect">Your Name *</label>
+                <select id="raterNameSelect" required class="sort-select">
+                    <option value="">-- Select your name --</option>
+                    <option value="__new__">+ New Member</option>
+                </select>
+            </div>
+            <div class="form-group" id="newMemberGroup" style="display:none;">
+                <label for="raterNameNew">Enter Your Name *</label>
+                <input type="text" id="raterNameNew" placeholder="Enter your name">
             </div>
             <div class="form-group">
                 <label for="toppingsRating">Toppings (1-10) *</label>
@@ -330,6 +337,17 @@
                         </select>
                     </div>
                     <div class="form-group">
+                        <label for="galleryPhotographer">Photographer</label>
+                        <select id="galleryPhotographer" class="sort-select">
+                            <option value="">-- Select photographer --</option>
+                            <option value="__new__">+ Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="newPhotographerGroup" style="display:none;">
+                        <label for="galleryPhotographerNew">Photographer Name</label>
+                        <input type="text" id="galleryPhotographerNew" placeholder="Enter photographer name">
+                    </div>
+                    <div class="form-group">
                         <label for="galleryPhoto">Photo</label>
                         <input type="file" id="galleryPhoto" accept="image/*" multiple>
                     </div>
@@ -362,6 +380,20 @@
 
                 <!-- Attendees Tab -->
                 <div class="admin-tab-content" id="tab-manageAttendees">
+                    <!-- Club Members Section -->
+                    <h3>Club Members</h3>
+                    <p style="color:#666;margin-bottom:12px;">Manage the list of club members. These names appear in the rating form dropdown.</p>
+                    <div id="adminMembersList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+                        <p style="color:#999;">Loading...</p>
+                    </div>
+                    <div style="display:flex;gap:8px;margin-bottom:24px;">
+                        <input type="text" id="newMemberName" placeholder="New member name" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-family:'Roboto',sans-serif;">
+                        <button class="btn btn-primary" id="addMemberAdminBtn" style="padding:8px 16px;">Add Member</button>
+                    </div>
+
+                    <hr style="border:none;border-top:1px solid var(--border);margin-bottom:20px;">
+
+                    <!-- Per-Burger Attendees Section -->
                     <h3>Manage Attendees by Burger</h3>
                     <p style="color:#666;margin-bottom:16px;">Add or remove attendees for each burger. For historical entries without individual names, add what you know or leave as "Unknown".</p>
                     <div id="adminAttendeesManager">
@@ -394,6 +426,6 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="config.js?v=17"></script>
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
 </body>
 </html>

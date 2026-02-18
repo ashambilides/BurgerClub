@@ -9,6 +9,7 @@ let lightboxIndex = 0;
 let map;
 let adminLoggedIn = false;
 let attendeesData = {}; // Maps ranking -> array of names
+let membersData = []; // Array of member name strings from 'members' table
 
 // ============================================
 // SUPABASE REST HELPERS
@@ -96,6 +97,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     recalculateRankings().then(() => loadRankings()).catch(e => console.error('Recalc failed:', e));
 
     initMap();
+
+    // Load members list
+    await loadMembers().catch(e => console.error('Members load failed:', e));
 
     // Load secondary features in background
     loadGallery().catch(e => console.error('Gallery load failed:', e));
@@ -413,6 +417,112 @@ async function loadAttendeesData() {
     }
 }
 
+// ============================================
+// MEMBERS
+// ============================================
+
+async function loadMembers() {
+    if (!isConfigured()) return;
+    try {
+        const data = await dbSelect('members', 'select=name&order=name.asc');
+        membersData = data.map(m => m.name);
+    } catch (err) {
+        console.error('Load members error:', err);
+        membersData = [];
+    }
+}
+
+function populateRaterNameSelect() {
+    const select = document.getElementById('raterNameSelect');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">-- Select your name --</option>' +
+        membersData.map(name =>
+            `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
+        ).join('') +
+        '<option value="__new__">+ New Member</option>';
+}
+
+function populatePhotographerSelect() {
+    const select = document.getElementById('galleryPhotographer');
+    if (!select) return;
+
+    select.innerHTML = '<option value="">-- Select photographer --</option>' +
+        membersData.map(name =>
+            `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`
+        ).join('') +
+        '<option value="__new__">+ Other</option>';
+}
+
+// ============================================
+// ADMIN MEMBER MANAGEMENT
+// ============================================
+
+async function loadMembersManager() {
+    const container = document.getElementById('adminMembersList');
+    if (!container) return;
+
+    await loadMembers();
+
+    if (membersData.length === 0) {
+        container.innerHTML = '<p style="color:#999;">No members yet. Add some below or run the SQL migration.</p>';
+        return;
+    }
+
+    container.innerHTML = membersData.map(name => `
+        <div class="attendee-tag">
+            <span>${escapeHtml(name)}</span>
+            <button class="tag-remove" onclick="removeMemberAdmin('${escapeHtml(name).replace(/'/g, "\\'")}')" title="Remove member">×</button>
+        </div>
+    `).join('');
+}
+
+async function addMemberAdmin() {
+    const input = document.getElementById('newMemberName');
+    const name = input.value.trim();
+
+    if (!name) {
+        alert('Please enter a member name.');
+        return;
+    }
+
+    try {
+        await dbInsert('members', { name: name });
+        input.value = '';
+        await loadMembers();
+        loadMembersManager();
+        populateRaterNameSelect();
+        populatePhotographerSelect();
+    } catch (err) {
+        if (err.message.includes('duplicate') || err.message.includes('unique') || err.message.includes('23505')) {
+            alert(`"${name}" is already a member.`);
+        } else {
+            console.error('Add member error:', err);
+            alert('Failed to add member: ' + err.message);
+        }
+    }
+}
+
+async function removeMemberAdmin(name) {
+    if (!confirm(`Remove "${name}" from the members list? This won't affect existing attendance records.`)) return;
+
+    try {
+        // Find and delete the member
+        const members = await dbSelect('members', `select=*&name=eq.${encodeURIComponent(name)}`);
+        if (members && members.length > 0) {
+            await dbDelete('members', 'id', members[0].id);
+        }
+
+        await loadMembers();
+        loadMembersManager();
+        populateRaterNameSelect();
+        populatePhotographerSelect();
+    } catch (err) {
+        console.error('Remove member error:', err);
+        alert('Failed to remove member: ' + err.message);
+    }
+}
+
 function showAttendees(ranking) {
     const attendees = attendeesData[ranking] || [];
     const burger = burgerData.find(b => b['Ranking'] == ranking);
@@ -628,7 +738,7 @@ function renderGallery(photos, container) {
             <img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.caption || 'Burger photo')}" loading="lazy">
             <div class="gallery-caption">
                 <strong>${escapeHtml(photo.restaurant)}</strong>
-                ${escapeHtml(photo.caption)}
+                ${photo.uploaded_by ? `<span class="photo-credit">Photo by ${escapeHtml(photo.uploaded_by)}</span>` : escapeHtml(photo.caption)}
             </div>
         </div>
     `).join('');
@@ -677,8 +787,11 @@ function navigateLightbox(dir) {
 function updateLightbox() {
     const photo = galleryPhotos[lightboxIndex];
     document.getElementById('lightboxImg').src = photo.url;
-    document.getElementById('lightboxCaption').textContent =
-        `${photo.restaurant || ''} ${photo.caption ? '— ' + photo.caption : ''}`.trim();
+    let caption = `${photo.restaurant || ''} ${photo.caption ? '— ' + photo.caption : ''}`.trim();
+    if (photo.uploaded_by) {
+        caption += ` · Photo by ${photo.uploaded_by}`;
+    }
+    document.getElementById('lightboxCaption').textContent = caption;
 }
 
 // ============================================
@@ -706,6 +819,28 @@ async function checkFormStatus() {
             document.getElementById('currentBurgerInfo').textContent =
                 `Rating: ${config.active_burger || 'Current burger'}`;
             form.style.display = 'block';
+
+            // Populate rater name dropdown with members
+            populateRaterNameSelect();
+
+            // Wire up show/hide for new member input
+            const raterSelect = document.getElementById('raterNameSelect');
+            const newMemberGroup = document.getElementById('newMemberGroup');
+            const raterNewInput = document.getElementById('raterNameNew');
+            if (raterSelect && !raterSelect._listenerAdded) {
+                raterSelect.addEventListener('change', () => {
+                    if (raterSelect.value === '__new__') {
+                        newMemberGroup.style.display = 'block';
+                        raterNewInput.required = true;
+                        raterNewInput.focus();
+                    } else {
+                        newMemberGroup.style.display = 'none';
+                        raterNewInput.required = false;
+                        raterNewInput.value = '';
+                    }
+                });
+                raterSelect._listenerAdded = true;
+            }
         } else {
             statusDiv.innerHTML = '<p>The form is currently <strong>closed</strong>. Check back when the admin opens it for the next burger!</p>';
             statusDiv.className = 'form-status closed';
@@ -729,7 +864,7 @@ async function handleFormSubmit(e) {
     msg.className = 'form-message';
 
     try {
-        const configData = await dbSelect('form_config', 'select=active_burger,is_open&id=eq.1');
+        const configData = await dbSelect('form_config', 'select=active_burger,is_open,active_burger_ranking&id=eq.1');
         const config = configData[0];
 
         if (!config || !config.is_open) {
@@ -739,9 +874,31 @@ async function handleFormSubmit(e) {
             return;
         }
 
+        // Get name from dropdown or new member input
+        const raterSelect = document.getElementById('raterNameSelect');
+        const raterNewInput = document.getElementById('raterNameNew');
+        let raterName = '';
+
+        if (raterSelect.value === '__new__') {
+            raterName = raterNewInput.value.trim();
+            if (!raterName) {
+                msg.textContent = 'Please enter your name.';
+                msg.className = 'form-message error';
+                submitBtn.disabled = false;
+                return;
+            }
+        } else if (raterSelect.value) {
+            raterName = raterSelect.value;
+        } else {
+            msg.textContent = 'Please select your name.';
+            msg.className = 'form-message error';
+            submitBtn.disabled = false;
+            return;
+        }
+
         const rating = {
             burger: config.active_burger,
-            name: document.getElementById('raterName').value,
+            name: raterName,
             toppings: parseFloat(document.getElementById('toppingsRating').value),
             bun: parseFloat(document.getElementById('bunRating').value),
             doneness: parseFloat(document.getElementById('donenessRating').value),
@@ -757,11 +914,12 @@ async function handleFormSubmit(e) {
                 const publicUrl = await storageUpload('photos', fileName, photoFile);
                 rating.photo_url = publicUrl;
 
-                // Also add to gallery
+                // Also add to gallery with photo attribution
                 await dbInsert('gallery', {
                     url: publicUrl,
                     restaurant: config.active_burger,
                     caption: `Rated by ${rating.name}`,
+                    uploaded_by: rating.name,
                 });
             } catch (uploadErr) {
                 console.error('Photo upload failed, submitting without photo:', uploadErr);
@@ -806,9 +964,24 @@ async function handleFormSubmit(e) {
             }
         }
 
+        // If new member was added, insert into members table and refresh dropdown
+        if (raterSelect.value === '__new__' && raterName) {
+            try {
+                await dbInsert('members', { name: raterName });
+                await loadMembers();
+                populateRaterNameSelect();
+            } catch (memberErr) {
+                // Ignore duplicate error — member may already exist
+                console.warn('Member insert (may already exist):', memberErr);
+            }
+        }
+
         msg.textContent = 'Rating submitted! Thanks for your vote.';
         msg.className = 'form-message success';
         e.target.reset();
+        // Reset new member group visibility
+        document.getElementById('newMemberGroup').style.display = 'none';
+        document.getElementById('raterNameNew').required = false;
 
         // Reload gallery if photo was uploaded
         if (photoFile) {
@@ -949,6 +1122,25 @@ function initAdminPanel() {
     document.getElementById('deactivateFormBtn').addEventListener('click', () => handleFormControl(false));
     document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
     document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
+    document.getElementById('addMemberAdminBtn')?.addEventListener('click', addMemberAdmin);
+    document.getElementById('newMemberName')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); addMemberAdmin(); }
+    });
+
+    // Photographer dropdown show/hide for "Other"
+    const photoSelect = document.getElementById('galleryPhotographer');
+    const newPhotoGroup = document.getElementById('newPhotographerGroup');
+    if (photoSelect && newPhotoGroup) {
+        photoSelect.addEventListener('change', () => {
+            if (photoSelect.value === '__new__') {
+                newPhotoGroup.style.display = 'block';
+                document.getElementById('galleryPhotographerNew')?.focus();
+            } else {
+                newPhotoGroup.style.display = 'none';
+            }
+        });
+    }
+
     initAddressSearch();
 
     // Collapsible burger list toggle
@@ -1169,9 +1361,13 @@ async function loadAdminData() {
     loadSuggestions();
     loadRequests();
 
-    // Load attendees manager
+    // Load attendees manager and members
     loadAttendeesManager();
+    loadMembersManager();
     loadAttendanceTracker();
+
+    // Populate photographer dropdown in gallery tab
+    populatePhotographerSelect();
 }
 
 function populateBurgerSelect() {
@@ -1483,6 +1679,18 @@ async function handleGalleryUpload() {
     // Parse "Restaurant ||| Description"
     const [restaurant, burgerDesc] = burgerValue ? burgerValue.split(' ||| ') : ['', ''];
 
+    // Get photographer name
+    const photoSelect = document.getElementById('galleryPhotographer');
+    const photoNewInput = document.getElementById('galleryPhotographerNew');
+    let photographer = '';
+    if (photoSelect) {
+        if (photoSelect.value === '__new__') {
+            photographer = photoNewInput ? photoNewInput.value.trim() : '';
+        } else {
+            photographer = photoSelect.value;
+        }
+    }
+
     if (!isConfigured()) {
         msg.textContent = 'Supabase not configured.';
         msg.className = 'form-message error';
@@ -1513,12 +1721,16 @@ async function handleGalleryUpload() {
                 url: publicUrl,
                 restaurant: restaurant || '',
                 caption: burgerDesc ? burgerDesc.substring(0, 80) : '',
+                uploaded_by: photographer || null,
             });
         }
 
         msg.textContent = `${files.length} photo(s) uploaded!`;
         msg.className = 'form-message success';
         document.getElementById('galleryPhoto').value = '';
+        if (photoSelect) photoSelect.value = '';
+        if (photoNewInput) photoNewInput.value = '';
+        document.getElementById('newPhotographerGroup').style.display = 'none';
         loadGallery();
         loadAdminData();
     } catch (err) {
