@@ -471,7 +471,7 @@ async function loadMembersManager() {
 
     container.innerHTML = membersData.map(name => `
         <div class="attendee-tag">
-            <span>${escapeHtml(name)}</span>
+            <span onclick="editMemberAdmin('${escapeHtml(name).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="Click to edit name">${escapeHtml(name)} ✏️</span>
             <button class="tag-remove" onclick="removeMemberAdmin('${escapeHtml(name).replace(/'/g, "\\'")}')" title="Remove member">×</button>
         </div>
     `).join('');
@@ -520,6 +520,30 @@ async function removeMemberAdmin(name) {
     } catch (err) {
         console.error('Remove member error:', err);
         alert('Failed to remove member: ' + err.message);
+    }
+}
+
+async function editMemberAdmin(oldName) {
+    const newName = prompt(`Rename "${oldName}" to:`, oldName);
+    if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
+
+    try {
+        const members = await dbSelect('members', `select=*&name=eq.${encodeURIComponent(oldName)}`);
+        if (members && members.length > 0) {
+            await dbUpdate('members', { name: newName.trim() }, 'id', members[0].id);
+        }
+
+        await loadMembers();
+        loadMembersManager();
+        populateRaterNameSelect();
+        populatePhotographerSelect();
+    } catch (err) {
+        if (err.message.includes('duplicate') || err.message.includes('unique') || err.message.includes('23505')) {
+            alert(`"${newName.trim()}" already exists as a member.`);
+        } else {
+            console.error('Edit member error:', err);
+            alert('Failed to edit member: ' + err.message);
+        }
     }
 }
 
