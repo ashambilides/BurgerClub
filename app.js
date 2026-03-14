@@ -1100,6 +1100,12 @@ async function recalculateRankings() {
         const all = await dbSelect('results', 'select=*');
         if (!all || all.length === 0) return;
 
+        // Save old ranking → result.id mapping (before any changes)
+        const oldRankToResultId = {};
+        all.forEach(entry => {
+            oldRankToResultId[entry.ranking] = entry.id;
+        });
+
         // Separate rated and unrated
         const rated = all.filter(r => r.burger_rating !== null && r.burger_rating !== undefined);
         const unrated = all.filter(r => r.burger_rating === null || r.burger_rating === undefined);
@@ -1107,19 +1113,43 @@ async function recalculateRankings() {
         // Sort rated by rating descending (highest rating = rank #1)
         rated.sort((a, b) => parseFloat(b.burger_rating) - parseFloat(a.burger_rating));
 
-        // Assign rankings: rated first, then unrated at the end
+        // Assign rankings and track result_id → new_ranking
+        const resultIdToNewRank = {};
         let rank = 1;
         for (const entry of rated) {
+            resultIdToNewRank[entry.id] = rank;
             if (entry.ranking !== rank) {
                 await dbUpdate('results', { ranking: rank }, 'id', entry.id);
             }
             rank++;
         }
         for (const entry of unrated) {
+            resultIdToNewRank[entry.id] = rank;
             if (entry.ranking !== rank) {
                 await dbUpdate('results', { ranking: rank }, 'id', entry.id);
             }
             rank++;
+        }
+
+        // Remap attendees: if any rankings changed, update attendees.burger_id
+        // Build old_rank → new_rank via result_id
+        const rankChanges = {}; // old_rank → new_rank
+        for (const [oldRank, resultId] of Object.entries(oldRankToResultId)) {
+            const newRank = resultIdToNewRank[resultId];
+            if (newRank !== undefined && parseInt(oldRank) !== newRank) {
+                rankChanges[parseInt(oldRank)] = newRank;
+            }
+        }
+
+        if (Object.keys(rankChanges).length > 0) {
+            // Load all attendees (snapshot) and update those affected
+            const allAttendees = await dbSelect('attendees', 'select=*');
+            for (const att of allAttendees) {
+                const newBurgerId = rankChanges[att.burger_id];
+                if (newBurgerId !== undefined) {
+                    await dbUpdate('attendees', { burger_id: newBurgerId }, 'id', att.id);
+                }
+            }
         }
     } catch (err) {
         console.error('Recalculate rankings error:', err);
@@ -1805,6 +1835,9 @@ async function deleteBurger(ranking, restaurant) {
     if (!confirm(`FINAL WARNING: This will permanently delete #${ranking} ${restaurant}. Are you absolutely sure?`)) return;
 
     try {
+        // Delete attendees for this burger BEFORE deleting the burger
+        await dbDelete('attendees', 'burger_id', ranking);
+
         await dbDelete('results', 'ranking', ranking);
 
         // Recalculate rankings so there are no gaps (1, 2, 3... not 2, 3, 5...)
