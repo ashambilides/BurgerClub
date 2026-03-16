@@ -343,10 +343,19 @@ async function loadAttendeesData() {
         // This ensures historical entries get their attendees populated
         ratings.forEach(r => {
             const burgerLabel = r.burger;
-            const ranking = burgerToRanking[burgerLabel];
+            let ranking = burgerToRanking[burgerLabel];
+
+            // If exact match fails, try prefix matching (handles truncated labels)
+            if (!ranking && burgerLabel) {
+                for (const [fullLabel, rank] of Object.entries(burgerToRanking)) {
+                    if (fullLabel.startsWith(burgerLabel.replace(/\.\.\.$/,'')) || burgerLabel.startsWith(fullLabel.replace(/\.\.\.$/,''))) {
+                        ranking = rank;
+                        break;
+                    }
+                }
+            }
 
             if (!ranking) {
-                // Skip unknown burgers (like deleted test burgers)
                 return;
             }
 
@@ -408,6 +417,23 @@ async function loadAttendeesData() {
                             }
                         });
                     }
+                }
+            }
+        }
+
+        // Clean up stale "Unknown" attendees on non-historical burgers
+        // New burgers (not in historicalCounts) should never have Unknown placeholders
+        // These are orphaned records from previously deleted burgers
+        for (const att of attendees) {
+            if (att.name && att.name.startsWith('Unknown ') && !historicalCounts[att.burger_id]) {
+                try {
+                    await dbDelete('attendees', 'id', att.id);
+                    // Remove from attendeesData if present
+                    if (attendeesData[att.burger_id]) {
+                        attendeesData[att.burger_id] = attendeesData[att.burger_id].filter(n => n !== att.name);
+                    }
+                } catch (delErr) {
+                    console.error('Failed to clean stale attendee:', delErr);
                 }
             }
         }
