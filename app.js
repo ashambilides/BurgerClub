@@ -946,7 +946,10 @@ async function checkFormStatus() {
         statusDiv.className = 'form-status closed';
     }
 
-    form.addEventListener('submit', handleFormSubmit);
+    if (!form._submitListenerAdded) {
+        form.addEventListener('submit', handleFormSubmit);
+        form._submitListenerAdded = true;
+    }
 }
 
 async function handleFormSubmit(e) {
@@ -1936,6 +1939,16 @@ async function deleteBurger(ranking, restaurant) {
         // Delete attendees for this burger BEFORE deleting the burger
         await dbDelete('attendees', 'burger_id', ranking);
 
+        // If the deleted burger was the active form burger, close the form
+        try {
+            const formConfig = await dbSelect('form_config', 'select=active_burger_ranking,is_open&id=eq.1');
+            if (formConfig && formConfig[0] && formConfig[0].is_open && formConfig[0].active_burger_ranking == ranking) {
+                await dbUpdate('form_config', { is_open: false, active_burger: null, active_burger_ranking: null }, 'id', 1);
+            }
+        } catch (fcErr) {
+            console.error('Failed to check/close form config:', fcErr);
+        }
+
         await dbDelete('results', 'ranking', ranking);
 
         // Recalculate rankings so there are no gaps (1, 2, 3... not 2, 3, 5...)
@@ -2394,6 +2407,13 @@ async function addAttendee(ranking) {
     }
 
     try {
+        // Check for duplicate name on this burger
+        const existing = await dbSelect('attendees', \`select=id&burger_id=eq.\${parseInt(ranking)}&name=eq.\${encodeURIComponent(name)}\`);
+        if (existing && existing.length > 0) {
+            alert(name + ' is already listed for this burger.');
+            return;
+        }
+
         await dbInsert('attendees', {
             burger_id: parseInt(ranking),
             name: name,
