@@ -1035,7 +1035,7 @@ async function handleFormSubmit(e) {
         }
 
         // Recalculate and update burger rating in results table
-        await updateBurgerRating(config.active_burger);
+        await updateBurgerRating(config.active_burger, config.active_burger_ranking);
     } catch (err) {
         console.error('Submit error:', err);
         msg.textContent = 'Failed to submit. Please try again.';
@@ -1048,7 +1048,7 @@ async function handleFormSubmit(e) {
 // UPDATE BURGER RATING
 // ============================================
 
-async function updateBurgerRating(burgerLabel) {
+async function updateBurgerRating(burgerLabel, ranking) {
     try {
         // Get all ratings for this burger
         const ratings = await dbSelect('ratings', `select=*&burger=eq.${encodeURIComponent(burgerLabel)}`);
@@ -1069,18 +1069,19 @@ async function updateBurgerRating(burgerLabel) {
             avgFlavor * 0.40
         ).toFixed(2);
 
-        // Parse the burger label to get restaurant and description
-        const parts = burgerLabel.split(' \u2014 ');
-        const restaurant = parts[0];
-        const description = parts.length > 1 ? parts[1] : '';
-
-        // Find and update the corresponding entry in results table
-        const results = await dbSelect('results',
-            `select=*&restaurant=eq.${encodeURIComponent(restaurant)}&description=eq.${encodeURIComponent(description)}`);
-
-        if (results && results.length > 0) {
-            const result = results[0];
-            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', result.ranking);
+        // Use ranking directly to update results (avoids truncated label mismatch)
+        if (ranking) {
+            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', parseInt(ranking));
+        } else {
+            // Fallback: parse label and match by restaurant + description
+            const parts = burgerLabel.split(' — ');
+            const restaurant = parts[0];
+            const description = parts.length > 1 ? parts[1] : '';
+            const results = await dbSelect('results',
+                `select=*&restaurant=eq.${encodeURIComponent(restaurant)}&description=eq.${encodeURIComponent(description)}`);
+            if (results && results.length > 0) {
+                await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', results[0].ranking);
+            }
         }
 
         // Recalculate ALL rankings based on burger_rating (highest = #1)
@@ -1091,6 +1092,42 @@ async function updateBurgerRating(burgerLabel) {
         rebuildMap();
     } catch (err) {
         console.error('Update burger rating error:', err);
+    }
+}
+
+
+async function recalculateAllRatings() {
+    try {
+        const allResults = await dbSelect('results', 'select=*');
+        const allRatings = await dbSelect('ratings', 'select=*');
+        if (!allResults || !allRatings) return;
+
+        let updated = 0;
+        for (const result of allResults) {
+            const fullLabel = result.restaurant + (result.description ? ' — ' + result.description : '');
+            // Match ratings: exact match OR ratings burger starts with "Restaurant — " (handles truncated labels)
+            const prefix = result.restaurant + ' — ';
+            const matching = allRatings.filter(r =>
+                r.burger === fullLabel || (r.burger && r.burger.startsWith(prefix) && fullLabel.startsWith(r.burger.replace(/\.\.\.$/,'')))
+            );
+
+            if (matching.length > 0) {
+                const avgToppings = matching.reduce((sum, r) => sum + (r.toppings || 0), 0) / matching.length;
+                const avgBun = matching.reduce((sum, r) => sum + (r.bun || 0), 0) / matching.length;
+                const avgDoneness = matching.reduce((sum, r) => sum + (r.doneness || 0), 0) / matching.length;
+                const avgFlavor = matching.reduce((sum, r) => sum + (r.flavor || 0), 0) / matching.length;
+                const overallAvg = (avgToppings * 0.20 + avgBun * 0.20 + avgDoneness * 0.20 + avgFlavor * 0.40).toFixed(2);
+                await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', result.ranking);
+                updated++;
+            }
+        }
+
+        await recalculateRankings();
+        await loadRankings();
+        rebuildMap();
+        return updated;
+    } catch (err) {
+        console.error('Recalculate all ratings error:', err);
     }
 }
 
@@ -1199,6 +1236,19 @@ function initAdminPanel() {
     document.getElementById('uploadGalleryBtn').addEventListener('click', handleGalleryUpload);
     document.getElementById('changePasswordBtn').addEventListener('click', handleChangePassword);
     document.getElementById('addMemberAdminBtn')?.addEventListener('click', addMemberAdmin);
+    document.getElementById('recalcAllRatingsBtn')?.addEventListener('click', async () => {
+        const msg = document.getElementById('recalcMsg');
+        msg.textContent = 'Recalculating...';
+        msg.className = 'form-message';
+        try {
+            const count = await recalculateAllRatings();
+            msg.textContent = 'Recalculated ratings for ' + (count || 0) + ' burgers.';
+            msg.className = 'form-message success';
+        } catch (err) {
+            msg.textContent = 'Error: ' + err.message;
+            msg.className = 'form-message error';
+        }
+    });
     document.getElementById('newMemberName')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addMemberAdmin(); }
     });
@@ -1714,7 +1764,7 @@ async function handleFormControl(open) {
 
     // Parse "Restaurant ||| Description" format
     const [burgerRestaurant, burgerDesc] = burgerValue.split(' ||| ');
-    const burgerLabel = burgerRestaurant + (burgerDesc ? ' — ' + (burgerDesc.length > 60 ? burgerDesc.substring(0, 60) + '...' : burgerDesc) : '');
+    const burgerLabel = burgerRestaurant + (burgerDesc ? ' — ' + burgerDesc : '');
 
     try {
         const update = { is_open: open };
