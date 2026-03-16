@@ -283,31 +283,49 @@ async function loadAttendeesData() {
     try {
         // Historical submission counts from original Google Sheet
         // Maps ranking -> number of original form submissions
-        const historicalCounts = {
-            1: 6,  // Rolo's
-            2: 7,  // Red Hook Tavern
-            3: 6,  // The Lions Bar & Grill
-            4: 7,  // Virginia's
-            5: 8,  // Raoul's
-            6: 7,  // Au Cheval
-            7: 7,  // Suprema Provisions
-            8: 7,  // Peter Luger
-            9: 6,  // Cozy Royale (regular)
-            10: 7, // Minetta Tavern BLACK LABEL
-            11: 6, // Cozy Royale Dry-Aged
-            12: 5, // Hamburger America CLASSIC SMASH
-            13: 7, // Minetta Tavern MINETTA
-            14: 10, // Gotham Burger
-            15: 5, // Hamburger America FRIED ONION
-            16: 4, // Nowon LEGENDARY
-            17: 7, // Smacking Burger
-            18: 4, // Fairfax
-            19: 4, // Nowon DRY AGED
-            20: 8, // Petey's Burger
-            21: 7, // Burger by Day
-            22: 9, // JG Melon
-            23: 5, // Corner Bistro
+        // Historical submission counts keyed by restaurant name
+        // For restaurants with multiple entries, use "Restaurant|keyword" format
+        const historicalCountsByName = {
+            "Rolo's": 6,
+            "Red Hook Tavern": 7,
+            "The Lions Bar & Grill": 6,
+            "Virginia's": 7,
+            "Raoul's": 8,
+            "Au Cheval": 7,
+            "Suprema Provisions": 7,
+            "Peter Luger": 7,
+            "Cozy Royale|Cheeseburger": 6,
+            "Minetta Tavern|BLACK LABEL": 7,
+            "Cozy Royale|Dry-Aged": 6,
+            "Hamburger America|CLASSIC SMASH": 5,
+            "Minetta Tavern|MINETTA": 7,
+            "Gotham Burger": 10,
+            "Hamburger America|FRIED ONION": 5,
+            "Nowon|LEGENDARY": 4,
+            "Smacking Burger": 7,
+            "Fairfax": 4,
+            "Nowon|DRY AGED": 4,
+            "Petey's Burger": 8,
+            "Burger by Day": 7,
+            "JG Melon": 9,
+            "Corner Bistro": 5,
         };
+
+        // Look up historical count by restaurant name + description
+        function getHistoricalCount(restaurant, description) {
+            // Try exact restaurant match (unique restaurants)
+            if (historicalCountsByName[restaurant] !== undefined) return historicalCountsByName[restaurant];
+            // Try restaurant|keyword match (for restaurants with multiple entries)
+            for (const [key, count] of Object.entries(historicalCountsByName)) {
+                if (key.includes('|')) {
+                    const [rest, keyword] = key.split('|');
+                    if (rest === restaurant && description && description.toUpperCase().includes(keyword.toUpperCase())) {
+                        return count;
+                    }
+                }
+            }
+            return 0;
+        }
 
         // Load attendees table
         const attendees = await dbSelect('attendees', 'select=*');
@@ -373,7 +391,7 @@ async function loadAttendeesData() {
             const ranking = parseInt(row['Ranking']);
             const burgerRating = row['Burger Rating'];
             const currentCount = attendeesData[ranking]?.length || 0;
-            const historicalCount = historicalCounts[ranking] || 0;
+            const historicalCount = getHistoricalCount(row['Restaurant'], row['Description']);
 
             // Skip if no historical data for this burger
             if (historicalCount === 0) continue;
@@ -422,13 +440,17 @@ async function loadAttendeesData() {
         }
 
         // Clean up stale "Unknown" attendees on non-historical burgers
-        // New burgers (not in historicalCounts) should never have Unknown placeholders
-        // These are orphaned records from previously deleted burgers
+        // Find which burger_ids belong to historical burgers
+        const historicalBurgerIds = new Set();
+        burgerData.forEach(row => {
+            if (getHistoricalCount(row['Restaurant'], row['Description']) > 0) {
+                historicalBurgerIds.add(parseInt(row['Ranking']));
+            }
+        });
         for (const att of attendees) {
-            if (att.name && att.name.startsWith('Unknown ') && !historicalCounts[att.burger_id]) {
+            if (att.name && att.name.startsWith('Unknown ') && !historicalBurgerIds.has(att.burger_id)) {
                 try {
                     await dbDelete('attendees', 'id', att.id);
-                    // Remove from attendeesData if present
                     if (attendeesData[att.burger_id]) {
                         attendeesData[att.burger_id] = attendeesData[att.burger_id].filter(n => n !== att.name);
                     }
