@@ -2408,7 +2408,7 @@ async function addAttendee(ranking) {
 
     try {
         // Check for duplicate name on this burger
-        const existing = await dbSelect('attendees', \`select=id&burger_id=eq.\${parseInt(ranking)}&name=eq.\${encodeURIComponent(name)}\`);
+        const existing = await dbSelect('attendees', `select=id&burger_id=eq.${parseInt(ranking)}&name=eq.${encodeURIComponent(name)}`);
         if (existing && existing.length > 0) {
             alert(name + ' is already listed for this burger.');
             return;
