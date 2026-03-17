@@ -1032,7 +1032,16 @@ async function handleFormSubmit(e) {
                 const label = `${row['Restaurant']} — ${row['Description']}`;
                 burgerToRanking[label] = row['Ranking'];
             });
-            const fallbackRanking = burgerToRanking[config.active_burger];
+            let fallbackRanking = burgerToRanking[config.active_burger];
+            // If exact match fails, try fuzzy matching for truncated labels
+            if (!fallbackRanking && config.active_burger) {
+                for (const [fullLabel, rank] of Object.entries(burgerToRanking)) {
+                    if (matchesBurgerLabel(config.active_burger, fullLabel)) {
+                        fallbackRanking = rank;
+                        break;
+                    }
+                }
+            }
             if (fallbackRanking) {
                 try {
                     await dbInsert('attendees', {
@@ -1699,8 +1708,6 @@ async function handleAddBurger() {
     }
 
     try {
-        await dbInsert('burgers', burger);
-
         // Also add to results table
         const maxData = await dbSelect('results', 'select=ranking&order=ranking.desc&limit=1');
         const nextRanking = (maxData[0] ? maxData[0].ranking : 0) + 1;
