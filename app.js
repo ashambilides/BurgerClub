@@ -330,9 +330,8 @@ async function loadAttendeesData() {
         // Populate from attendees table first
         // Use stable result_id to find current ranking (immune to ranking shifts)
         attendees.forEach(att => {
-            const ranking = att.result_id
-                ? getRankingForResultId(att.result_id)
-                : String(att.burger_id);  // fallback for pre-migration rows
+            if (!att.result_id) return;  // Skip entries without stable result_id
+            const ranking = getRankingForResultId(att.result_id);
             if (!ranking) return;  // orphaned attendee, skip
             if (!attendeesData[ranking]) attendeesData[ranking] = [];
             if (!attendeesData[ranking].includes(att.name)) {
