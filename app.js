@@ -299,9 +299,22 @@ function matchesBurgerLabel(ratingBurger, resultLabel) {
     return resultLabel.startsWith(cleanRating) || ratingBurger.startsWith(cleanResult);
 }
 
-async function loadAttendeesData() {
+let _attendeesCache = { time: 0, promise: null };
+
+async function loadAttendeesData(forceRefresh = false) {
     if (!isConfigured()) return;
 
+    // Cache for 5 seconds to avoid redundant fetches during page load
+    const now = Date.now();
+    if (!forceRefresh && _attendeesCache.promise && (now - _attendeesCache.time) < 5000) {
+        return _attendeesCache.promise;
+    }
+    _attendeesCache.time = now;
+    _attendeesCache.promise = _loadAttendeesDataInner();
+    return _attendeesCache.promise;
+}
+
+async function _loadAttendeesDataInner() {
     try {
         // Load attendees table
         const attendees = await dbSelect('attendees', 'select=*');
@@ -959,13 +972,26 @@ async function handleFormSubmit(e) {
             return;
         }
 
+        const toppings = parseFloat(document.getElementById('toppingsRating').value);
+        const bun = parseFloat(document.getElementById('bunRating').value);
+        const doneness = parseFloat(document.getElementById('donenessRating').value);
+        const flavor = parseFloat(document.getElementById('flavorRating').value);
+
+        // Validate rating values are within bounds
+        if ([toppings, bun, doneness, flavor].some(v => isNaN(v) || v < 1 || v > 10)) {
+            msg.textContent = 'All ratings must be between 1 and 10.';
+            msg.className = 'form-message error';
+            submitBtn.disabled = false;
+            return;
+        }
+
         const rating = {
             burger: config.active_burger,
             name: raterName,
-            toppings: parseFloat(document.getElementById('toppingsRating').value),
-            bun: parseFloat(document.getElementById('bunRating').value),
-            doneness: parseFloat(document.getElementById('donenessRating').value),
-            flavor: parseFloat(document.getElementById('flavorRating').value),
+            toppings,
+            bun,
+            doneness,
+            flavor,
             created_at: new Date().toISOString(),
         };
 
@@ -997,6 +1023,15 @@ async function handleFormSubmit(e) {
             } catch (uploadErr) {
                 console.error('Photo upload failed, submitting without photo:', uploadErr);
             }
+        }
+
+        // Check for duplicate submission (same person + same burger)
+        const existingRatings = await dbSelect('ratings', `select=id&burger=eq.${encodeURIComponent(config.active_burger)}&name=eq.${encodeURIComponent(raterName)}`);
+        if (existingRatings && existingRatings.length > 0) {
+            msg.textContent = 'You have already submitted a rating for this burger.';
+            msg.className = 'form-message error';
+            submitBtn.disabled = false;
+            return;
         }
 
         await dbInsert('ratings', rating);
@@ -1490,7 +1525,6 @@ async function loadAdminData() {
     // Load attendees manager and members
     loadAttendeesManager();
     loadMembersManager();
-    loadAttendanceTracker();
 
     // Populate photographer dropdown in gallery tab
     populatePhotographerSelect();
@@ -2411,7 +2445,7 @@ async function addAttendee(ranking) {
         });
 
         input.value = '';
-        await loadAttendeesData();
+        await loadAttendeesData(true);
         await loadRankings();
         loadAttendeesManager();
     } catch (err) {
@@ -2431,7 +2465,7 @@ async function removeAttendee(ranking, name) {
             await dbDelete('attendees', 'id', all[0].id);
         }
 
-        await loadAttendeesData();
+        await loadAttendeesData(true);
         await loadRankings();
         loadAttendeesManager();
     } catch (err) {
@@ -2460,142 +2494,16 @@ async function editUnknownAttendee(ranking, oldName) {
             });
         }
 
-        await loadAttendeesData();
+        await loadAttendeesData(true);
         await loadRankings();
         loadAttendeesManager();
         loadMainAttendanceTracker();
-        loadAttendanceTracker();
-    } catch (err) {
+        } catch (err) {
         console.error('Edit attendee error:', err);
         alert('Failed to edit attendee: ' + err.message);
     }
 }
 
-// ============================================
-// ATTENDANCE TRACKER
-// ============================================
-
-async function loadAttendanceTracker() {
-    const select1 = document.getElementById('trackerMemberSelect');
-    const select2 = document.getElementById('trackerMember1');
-    const select3 = document.getElementById('trackerMember2');
-
-    if (!select1) return;
-
-    await loadAttendeesData();
-
-    // Get all unique names (excluding "Unknown" placeholders)
-    const allNames = new Set();
-    Object.values(attendeesData).forEach(names => {
-        names.forEach(n => {
-            // Filter out "Unknown" placeholders from tracker
-            if (!n.startsWith('Unknown ')) {
-                allNames.add(n);
-            }
-        });
-    });
-
-    const sorted = Array.from(allNames).sort();
-
-    [select1, select2, select3].forEach(sel => {
-        if (!sel) return;
-        sel.innerHTML = '<option value="">-- Select member --</option>' +
-            sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-    });
-
-    // Event listeners
-    select1?.addEventListener('change', showIndividualAttendance);
-    document.getElementById('trackerCompareBtn')?.addEventListener('click', compareAttendance);
-}
-
-function showIndividualAttendance() {
-    const name = document.getElementById('trackerMemberSelect').value;
-    const resultsDiv = document.getElementById('trackerIndividualResults');
-
-    if (!name) {
-        resultsDiv.innerHTML = '';
-        return;
-    }
-
-    const attended = [];
-    for (const [ranking, names] of Object.entries(attendeesData)) {
-        if (names.includes(name)) {
-            const burger = burgerData.find(b => b['Ranking'] == ranking);
-            if (burger) attended.push(burger);
-        }
-    }
-
-    if (attended.length === 0) {
-        resultsDiv.innerHTML = `<p style="color:#999;">${escapeHtml(name)} hasn't attended any burgers yet.</p>`;
-        return;
-    }
-
-    resultsDiv.innerHTML = `
-        <div style="background:var(--bg);padding:16px;border-radius:8px;margin-top:12px;">
-            <h4 style="margin-bottom:10px;color:var(--red);">${escapeHtml(name)} - ${attended.length} burger${attended.length !== 1 ? 's' : ''}</h4>
-            ${attended.map(b => `
-                <div style="padding:6px 0;border-bottom:1px solid var(--border);">
-                    #${b['Ranking']} ${escapeHtml(b['Restaurant'])} — ${escapeHtml(b['Description'])}
-                </div>
-            `).join('')}
-        </div>
-    `;
-}
-
-function compareAttendance() {
-    const name1 = document.getElementById('trackerMember1').value;
-    const name2 = document.getElementById('trackerMember2').value;
-    const resultsDiv = document.getElementById('trackerComparisonResults');
-
-    if (!name1 || !name2) {
-        alert('Please select two members to compare.');
-        return;
-    }
-
-    const attended1 = [];
-    const attended2 = [];
-
-    for (const [ranking, names] of Object.entries(attendeesData)) {
-        const burger = burgerData.find(b => b['Ranking'] == ranking);
-        if (!burger) continue;
-
-        if (names.includes(name1)) attended1.push(burger);
-        if (names.includes(name2)) attended2.push(burger);
-    }
-
-    const both = attended1.filter(b => attended2.some(b2 => b2['Ranking'] === b['Ranking']));
-    const only1 = attended1.filter(b => !attended2.some(b2 => b2['Ranking'] === b['Ranking']));
-    const only2 = attended2.filter(b => !attended1.some(b1 => b1['Ranking'] === b['Ranking']));
-
-    resultsDiv.innerHTML = `
-        <div style="background:var(--bg);padding:16px;border-radius:8px;margin-top:12px;">
-            <h4 style="color:var(--red);margin-bottom:10px;">Comparison Results</h4>
-            <p><strong>${escapeHtml(name1)}:</strong> ${attended1.length} burgers | <strong>${escapeHtml(name2)}:</strong> ${attended2.length} burgers</p>
-            <p><strong>Both attended:</strong> ${both.length} burger${both.length !== 1 ? 's' : ''}</p>
-
-            ${both.length > 0 ? `
-                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
-                    <strong>Both:</strong>
-                    ${both.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
-                </div>
-            ` : ''}
-
-            ${only1.length > 0 ? `
-                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
-                    <strong>Only ${escapeHtml(name1)}:</strong>
-                    ${only1.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
-                </div>
-            ` : ''}
-
-            ${only2.length > 0 ? `
-                <div style="margin-top:10px;padding:10px;background:white;border-radius:6px;">
-                    <strong>Only ${escapeHtml(name2)}:</strong>
-                    ${only2.map(b => `<div style="padding:4px 0;">#${b['Ranking']} ${escapeHtml(b['Restaurant'])}</div>`).join('')}
-                </div>
-            ` : ''}
-        </div>
-    `;
-}
 // ============================================
 // MAIN PAGE ATTENDANCE TRACKER
 // ============================================
