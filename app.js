@@ -294,6 +294,16 @@ function getRankingForResultId(resultId) {
     return burger ? burger["Ranking"] : null;
 }
 
+// Helper: Match a rating's burger label to a result's full label
+// Handles exact matches and truncated labels (ending with "...")
+function matchesBurgerLabel(ratingBurger, resultLabel) {
+    if (!ratingBurger || !resultLabel) return false;
+    if (ratingBurger === resultLabel) return true;
+    const cleanRating = ratingBurger.replace(/\.\.\.$/,'');
+    const cleanResult = resultLabel.replace(/\.\.\.$/,'');
+    return resultLabel.startsWith(cleanRating) || ratingBurger.startsWith(cleanResult);
+}
+
 async function loadAttendeesData() {
     if (!isConfigured()) return;
 
@@ -341,7 +351,7 @@ async function loadAttendeesData() {
             // If exact match fails, try prefix matching (handles truncated labels)
             if (!ranking && burgerLabel) {
                 for (const [fullLabel, rank] of Object.entries(burgerToRanking)) {
-                    if (fullLabel.startsWith(burgerLabel.replace(/\.\.\.$/,'')) || burgerLabel.startsWith(fullLabel.replace(/\.\.\.$/,''))) {
+                    if (matchesBurgerLabel(burgerLabel, fullLabel)) {
                         ranking = rank;
                         break;
                     }
@@ -359,8 +369,6 @@ async function loadAttendeesData() {
                 attendeesData[ranking].push(r.name);
             }
         });
-
-
 
     } catch (err) {
         console.error('Load attendees error:', err);
@@ -964,9 +972,19 @@ async function handleFormSubmit(e) {
                 rating.photo_url = publicUrl;
 
                 // Also add to gallery with photo attribution
+                // Build clean label: "Restaurant" or "Restaurant - BURGER TYPE" for multi-burger venues
+                const gParts = (config.active_burger || '').split(' — ');
+                let galleryLabel = gParts[0];
+                if (gParts.length > 1) {
+                    const sameRest = burgerData.filter(b => b['Restaurant'] === gParts[0]);
+                    if (sameRest.length > 1) {
+                        const shortDesc = gParts[1].split(' - ')[0].trim();
+                        galleryLabel += ' - ' + (shortDesc.length > 40 ? shortDesc.substring(0, 37) + '...' : shortDesc);
+                    }
+                }
                 await dbInsert('gallery', {
                     url: publicUrl,
-                    restaurant: config.active_burger,
+                    restaurant: galleryLabel,
                     caption: `Rated by ${rating.name}`,
                     uploaded_by: rating.name,
                 });
@@ -1106,10 +1124,7 @@ async function recalculateAllRatings() {
         for (const result of allResults) {
             const fullLabel = result.restaurant + (result.description ? ' — ' + result.description : '');
             // Match ratings: exact match OR ratings burger starts with "Restaurant — " (handles truncated labels)
-            const prefix = result.restaurant + ' — ';
-            const matching = allRatings.filter(r =>
-                r.burger === fullLabel || (r.burger && r.burger.startsWith(prefix) && fullLabel.startsWith(r.burger.replace(/\.\.\.$/,'')))
-            );
+            const matching = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
 
             if (matching.length > 0) {
                 const avgToppings = matching.reduce((sum, r) => sum + (r.toppings || 0), 0) / matching.length;
@@ -1355,7 +1370,7 @@ async function loadAdminData() {
                 const avgB = (entries.reduce((s, r) => s + (r.bun || 0), 0) / entries.length).toFixed(1);
                 const avgD = (entries.reduce((s, r) => s + (r.doneness || 0), 0) / entries.length).toFixed(1);
                 const avgF = (entries.reduce((s, r) => s + (r.flavor || 0), 0) / entries.length).toFixed(1);
-                const avgAll = ((parseFloat(avgT) + parseFloat(avgB) + parseFloat(avgD) + parseFloat(avgF)) / 4).toFixed(2);
+                const avgAll = (parseFloat(avgT) * 0.20 + parseFloat(avgB) * 0.20 + parseFloat(avgD) * 0.20 + parseFloat(avgF) * 0.40).toFixed(2);
 
                 const burgerId = burger.replace(/[^a-zA-Z0-9]/g, '_');
                 html += `
