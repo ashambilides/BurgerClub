@@ -822,12 +822,25 @@ function updateLightbox() {
 
     // Always try to look up the full description from burgerData
     let description = '';
+    let displayName = photo.restaurant || '';
     if (photo.restaurant) {
-        const matches = burgerData.filter(b => b['Restaurant'] === photo.restaurant);
+        // Handle "Restaurant - BURGER TYPE" format for multi-burger venues
+        const dashIdx = photo.restaurant.indexOf(' - ');
+        const restName = dashIdx > -1 ? photo.restaurant.substring(0, dashIdx) : photo.restaurant;
+        const burgerType = dashIdx > -1 ? photo.restaurant.substring(dashIdx + 3) : null;
+        if (burgerType) displayName = restName; // Use just restaurant name for multi-burger
+
+        const matches = burgerData.filter(b => b['Restaurant'] === restName);
         if (matches.length === 1) {
             description = matches[0]['Description'];
+        } else if (matches.length > 1 && burgerType) {
+            // Multi-burger venue: match by burger type prefix in description
+            const best = matches.find(b =>
+                b['Description'] && b['Description'].toUpperCase().startsWith(burgerType.toUpperCase())
+            );
+            if (best) description = best['Description'];
         } else if (matches.length > 1) {
-            // Multiple burgers at same restaurant — match by caption prefix
+            // Fall back to caption prefix matching
             const captionText = (photo.caption || '').replace(/\.\.\.$/,'');
             const best = matches.find(b =>
                 b['Description'] && b['Description'].startsWith(captionText)
@@ -840,7 +853,7 @@ function updateLightbox() {
         description = photo.caption;
     }
 
-    let caption = photo.restaurant || '';
+    let caption = displayName;
     if (description) caption += ' — ' + description;
     if (photo.uploaded_by) {
         caption += ` · Photo by ${photo.uploaded_by}`;
@@ -1325,16 +1338,12 @@ async function loadAdminData() {
         const ratingsDiv = document.getElementById('submittedRatings');
         if (ratings && ratings.length > 0) {
             // Filter ratings to only include burgers that still exist in burgerData
-            const existingBurgers = new Set(burgerData.map(b => {
-                const restaurant = b['Restaurant'] || '';
-                const desc = b['Description'] || '';
-                return `${restaurant} — ${desc}`;
-            }));
-
             const filteredRatings = ratings.filter(r => {
-                // Check if this burger still exists
                 const burgerLabel = r.burger || '';
-                return existingBurgers.has(burgerLabel);
+                return burgerData.some(b => {
+                    const fullLabel = (b['Restaurant'] || '') + ' — ' + (b['Description'] || '');
+                    return matchesBurgerLabel(burgerLabel, fullLabel);
+                });
             });
 
             if (filteredRatings.length === 0) {
@@ -1833,9 +1842,18 @@ async function handleGalleryUpload() {
             const fileName = `gallery/${Date.now()}_${file.name}`;
             const publicUrl = await storageUpload('photos', fileName, file);
 
+            // Build clean gallery label: "Restaurant" or "Restaurant - BURGER TYPE" for multi-burger venues
+            let galleryLabel = restaurant || '';
+            if (burgerDesc) {
+                const sameRest = burgerData.filter(b => b['Restaurant'] === restaurant);
+                if (sameRest.length > 1) {
+                    const shortDesc = burgerDesc.split(' - ')[0].trim();
+                    galleryLabel += ' - ' + (shortDesc.length > 40 ? shortDesc.substring(0, 37) + '...' : shortDesc);
+                }
+            }
             await dbInsert('gallery', {
                 url: publicUrl,
-                restaurant: restaurant || '',
+                restaurant: galleryLabel,
                 caption: burgerDesc || '',
                 uploaded_by: photographer || null,
             });
