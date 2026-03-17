@@ -1416,7 +1416,7 @@ async function loadAdminData() {
                                 </thead>
                                 <tbody>
                                     ${entries.map(r => {
-                                        const rowAvg = ((r.toppings + r.bun + r.doneness + r.flavor) / 4).toFixed(1);
+                                        const rowAvg = ((r.toppings || 0) * 0.20 + (r.bun || 0) * 0.20 + (r.doneness || 0) * 0.20 + (r.flavor || 0) * 0.40).toFixed(1);
                                         return `<tr data-name="${escapeHtml(r.name)}" data-date="${r.created_at}" data-avg="${rowAvg}">
                                             <td>${escapeHtml(r.name)}</td>
                                             <td>${r.toppings}</td>
