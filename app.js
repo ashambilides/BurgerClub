@@ -1500,7 +1500,7 @@ async function loadAdminData() {
             const sorted = [...burgerData].sort((a, b) =>
                 (a['Restaurant'] || '').localeCompare(b['Restaurant'] || ''));
             burgerListDiv.innerHTML = sorted.map(row => {
-                const safeRestaurant = (row['Restaurant'] || '').replace(/'/g, "\\'");
+                const safeRestaurant = escapeHtml(row['Restaurant'] || '').replace(/'/g, "\\'");
                 return `
                 <div class="admin-burger-entry">
                     <div class="admin-burger-info">
