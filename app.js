@@ -60,8 +60,6 @@ async function dbDelete(table, matchColumn, matchValue) {
 }
 
 async function storageUpload(bucket, path, file) {
-    const formData = new FormData();
-    formData.append('file', file);
 
     const res = await fetch(`${STORAGE_BASE}/object/${bucket}/${path}`, {
         method: 'POST',
@@ -544,7 +542,6 @@ function closeAttendeesModal() {
     document.body.style.overflow = '';
 }
 
-// Initialize attendees modal close handler
 
 
 // ============================================
@@ -1708,7 +1705,7 @@ async function handleAddBurger() {
     }
 
     try {
-        // Also add to results table
+        // Add to results table
         const maxData = await dbSelect('results', 'select=ranking&order=ranking.desc&limit=1');
         const nextRanking = (maxData[0] ? maxData[0].ranking : 0) + 1;
 
