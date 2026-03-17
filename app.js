@@ -298,52 +298,6 @@ async function loadAttendeesData() {
     if (!isConfigured()) return;
 
     try {
-        // Historical submission counts from original Google Sheet
-        // Maps ranking -> number of original form submissions
-        // Historical submission counts keyed by restaurant name
-        // For restaurants with multiple entries, use "Restaurant|keyword" format
-        const historicalCountsByName = {
-            "Rolo's": 6,
-            "Red Hook Tavern": 7,
-            "The Lions Bar & Grill": 6,
-            "Virginia's": 7,
-            "Raoul's": 8,
-            "Au Cheval": 7,
-            "Suprema Provisions": 7,
-            "Peter Luger": 7,
-            "Cozy Royale|Cheeseburger": 6,
-            "Minetta Tavern|BLACK LABEL": 7,
-            "Cozy Royale|Dry-Aged": 6,
-            "Hamburger America|CLASSIC SMASH": 5,
-            "Minetta Tavern|MINETTA": 7,
-            "Gotham Burger": 10,
-            "Hamburger America|FRIED ONION": 5,
-            "Nowon|LEGENDARY": 4,
-            "Smacking Burger": 7,
-            "Fairfax": 4,
-            "Nowon|DRY AGED": 4,
-            "Petey's Burger": 8,
-            "Burger by Day": 7,
-            "JG Melon": 9,
-            "Corner Bistro": 5,
-        };
-
-        // Look up historical count by restaurant name + description
-        function getHistoricalCount(restaurant, description) {
-            // Try exact restaurant match (unique restaurants)
-            if (historicalCountsByName[restaurant] !== undefined) return historicalCountsByName[restaurant];
-            // Try restaurant|keyword match (for restaurants with multiple entries)
-            for (const [key, count] of Object.entries(historicalCountsByName)) {
-                if (key.includes('|')) {
-                    const [rest, keyword] = key.split('|');
-                    if (rest === restaurant && description && description.toUpperCase().includes(keyword.toUpperCase())) {
-                        return count;
-                    }
-                }
-            }
-            return 0;
-        }
-
         // Load attendees table
         const attendees = await dbSelect('attendees', 'select=*');
 
@@ -406,84 +360,7 @@ async function loadAttendeesData() {
             }
         });
 
-        // For historical burgers: Add "Unknown" placeholders based on original submission counts
-        // Save these to the database so they can be edited later
-        for (const row of burgerData) {
-            const ranking = parseInt(row['Ranking']);
-            const burgerRating = row['Burger Rating'];
-            const currentCount = attendeesData[ranking]?.length || 0;
-            const historicalCount = getHistoricalCount(row['Restaurant'], row['Description']);
 
-            // Skip if no historical data for this burger
-            if (historicalCount === 0) continue;
-
-            // If burger has a rating score, add Unknown placeholders
-            if (burgerRating && burgerRating !== '') {
-                // Calculate how many Unknowns we need
-                // If user already added names (e.g., "Angelo"), create (historicalCount - currentCount) Unknowns
-                const unknownsNeeded = Math.max(0, historicalCount - currentCount);
-
-                if (unknownsNeeded > 0) {
-                    // Check if Unknown placeholders already exist in DB for this burger
-                    const resultId = getResultIdForRanking(ranking);
-                    const existingUnknowns = attendees.filter(a =>
-                        (resultId ? a.result_id == resultId : a.burger_id == ranking)
-                        && a.name.startsWith('Unknown ')
-                    );
-
-                    // Only create new Unknowns if we don't have enough
-                    const existingUnknownCount = existingUnknowns.length;
-                    const toCreate = unknownsNeeded - existingUnknownCount;
-
-                    if (toCreate > 0) {
-                        // Create Unknown placeholders in database
-                        for (let i = 1; i <= toCreate; i++) {
-                            const unknownName = `Unknown ${i}`;
-                            try {
-                                await dbInsert('attendees', {
-                                    burger_id: ranking,
-                                    result_id: resultId,
-                                    name: unknownName,
-                                    rating_id: null,
-                                });
-                                attendeesData[ranking].push(unknownName);
-                            } catch (insertErr) {
-                                console.error(`Failed to create ${unknownName} for burger ${ranking}:`, insertErr);
-                            }
-                        }
-                    } else {
-                        // Add existing unknowns to attendeesData
-                        existingUnknowns.forEach(u => {
-                            if (!attendeesData[ranking].includes(u.name)) {
-                                attendeesData[ranking].push(u.name);
-                            }
-                        });
-                    }
-                }
-            }
-        }
-
-        // Clean up stale "Unknown" attendees on non-historical burgers
-        // Use stable result_ids to identify historical burgers
-        const historicalResultIds = new Set();
-        burgerData.forEach(row => {
-            if (getHistoricalCount(row['Restaurant'], row['Description']) > 0) {
-                historicalResultIds.add(row['ResultId']);
-            }
-        });
-        for (const att of attendees) {
-            if (att.name && att.name.startsWith('Unknown ') && !historicalResultIds.has(att.result_id)) {
-                try {
-                    await dbDelete('attendees', 'id', att.id);
-                    const attRanking = att.result_id ? getRankingForResultId(att.result_id) : String(att.burger_id);
-                    if (attRanking && attendeesData[attRanking]) {
-                        attendeesData[attRanking] = attendeesData[attRanking].filter(n => n !== att.name);
-                    }
-                } catch (delErr) {
-                    console.error('Failed to clean stale attendee:', delErr);
-                }
-            }
-        }
 
     } catch (err) {
         console.error('Load attendees error:', err);
