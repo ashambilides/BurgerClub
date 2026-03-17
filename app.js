@@ -91,9 +91,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load rankings — this is the main content
     await loadRankings().catch(e => console.error('Rankings load failed:', e));
 
-    // Ensure rankings have no gaps (fixes deletions that happened before auto-recalc)
-    recalculateRankings().then(() => loadRankings()).catch(e => console.error('Recalc failed:', e));
-
     initMap();
 
     // Load members list
@@ -1012,10 +1009,8 @@ async function handleFormSubmit(e) {
         if (ranking) {
             try {
                 await dbInsert('attendees', {
-                    burger_id: parseInt(ranking),
                     result_id: formResultId ? parseInt(formResultId) : getResultIdForRanking(ranking),
                     name: rating.name,
-                    rating_id: null,
                 });
             } catch (attendeeErr) {
                 console.error('Failed to add attendee:', attendeeErr);
@@ -1041,10 +1036,8 @@ async function handleFormSubmit(e) {
             if (fallbackRanking) {
                 try {
                     await dbInsert('attendees', {
-                        burger_id: parseInt(fallbackRanking),
                         result_id: getResultIdForRanking(fallbackRanking),
                         name: rating.name,
-                        rating_id: null,
                     });
                 } catch (attendeeErr) {
                     console.error('Failed to add attendee (fallback):', attendeeErr);
@@ -1092,16 +1085,24 @@ async function handleFormSubmit(e) {
 
 async function updateBurgerRating(burgerLabel, ranking, resultId) {
     try {
-        // Get all ratings for this burger
-        const ratings = await dbSelect('ratings', `select=*&burger=eq.${encodeURIComponent(burgerLabel)}`);
+        // Find the result to update via stable result_id
+        const updateId = resultId || getResultIdForRanking(ranking);
+        const result = burgerData.find(b => b['ResultId'] == updateId);
+        if (!result) return;
 
-        if (!ratings || ratings.length === 0) return;
+        const fullLabel = (result['Restaurant'] || '') + ' — ' + (result['Description'] || '');
+
+        // Fetch all ratings and use fuzzy matching (handles truncated labels like "Ched...")
+        const allRatings = await dbSelect('ratings', 'select=*');
+        const matching = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
+
+        if (matching.length === 0) return;
 
         // Calculate average of each category across all raters
-        const avgToppings = ratings.reduce((sum, r) => sum + (r.toppings || 0), 0) / ratings.length;
-        const avgBun = ratings.reduce((sum, r) => sum + (r.bun || 0), 0) / ratings.length;
-        const avgDoneness = ratings.reduce((sum, r) => sum + (r.doneness || 0), 0) / ratings.length;
-        const avgFlavor = ratings.reduce((sum, r) => sum + (r.flavor || 0), 0) / ratings.length;
+        const avgToppings = matching.reduce((sum, r) => sum + (r.toppings || 0), 0) / matching.length;
+        const avgBun = matching.reduce((sum, r) => sum + (r.bun || 0), 0) / matching.length;
+        const avgDoneness = matching.reduce((sum, r) => sum + (r.doneness || 0), 0) / matching.length;
+        const avgFlavor = matching.reduce((sum, r) => sum + (r.flavor || 0), 0) / matching.length;
 
         // Weighted scoring: Flavor 40%, Toppings 20%, Bun 20%, Doneness 20%
         const overallAvg = (
@@ -1111,12 +1112,9 @@ async function updateBurgerRating(burgerLabel, ranking, resultId) {
             avgFlavor * 0.40
         ).toFixed(2);
 
-        // Use stable result_id to update (immune to ranking shifts)
-        const updateId = resultId || getResultIdForRanking(ranking);
         if (updateId) {
             await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', parseInt(updateId));
         } else if (ranking) {
-            // Final fallback: use ranking directly
             await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', parseInt(ranking));
         }
 
@@ -1903,6 +1901,23 @@ async function deleteBurger(ranking, restaurant) {
             await dbDelete('attendees', 'result_id', resultId);
         }
 
+        // Delete associated ratings (prevent orphaned data)
+        if (resultId) {
+            try {
+                const result = burgerData.find(b => b['ResultId'] == resultId);
+                if (result) {
+                    const fullLabel = (result['Restaurant'] || '') + ' — ' + (result['Description'] || '');
+                    const allRatings = await dbSelect('ratings', 'select=id,burger');
+                    const orphaned = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
+                    for (const r of orphaned) {
+                        await dbDelete('ratings', 'id', r.id);
+                    }
+                }
+            } catch (ratErr) {
+                console.error('Failed to clean up ratings:', ratErr);
+            }
+        }
+
         // If the deleted burger was the active form burger, close the form
         try {
             const formConfig = await dbSelect('form_config', 'select=active_burger_result_id,is_open&id=eq.1');
@@ -2038,6 +2053,7 @@ async function loadSuggestions() {
 
         listDiv.innerHTML = data.map(s => {
             const created = new Date(s.created_at).toLocaleString();
+            const safeName = escapeHtml(s.name).replace(/'/g, "\\'");
             const addressedHtml = s.addressed
                 ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
                 : '';
@@ -2056,7 +2072,7 @@ async function loadSuggestions() {
                         <div class="suggestion-text">${escapeHtml(s.suggestion)}</div>
                         ${addressedHtml}
                     </div>
-                    <button class="btn-delete-suggestion" onclick="deleteSuggestion(${s.id}, '${escapeHtml(s.name)}')" title="Delete this suggestion">&times;</button>
+                    <button class="btn-delete-suggestion" onclick="deleteSuggestion(${s.id}, '${safeName}')" title="Delete this suggestion">&times;</button>
                 </div>
             `;
         }).join('');
@@ -2151,6 +2167,7 @@ async function loadRequests() {
 
         listDiv.innerHTML = data.map(s => {
             const created = new Date(s.created_at).toLocaleString();
+            const safeName = escapeHtml(s.name).replace(/'/g, "\\'");
             const addressedHtml = s.addressed
                 ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
                 : '';
@@ -2169,7 +2186,7 @@ async function loadRequests() {
                         <div class="suggestion-text">${escapeHtml(s.request)}</div>
                         ${addressedHtml}
                     </div>
-                    <button class="btn-delete-suggestion" onclick="deleteRequest(${s.id}, '${escapeHtml(s.name)}')" title="Delete this request">&times;</button>
+                    <button class="btn-delete-suggestion" onclick="deleteRequest(${s.id}, '${safeName}')" title="Delete this request">&times;</button>
                 </div>
             `;
         }).join('');
@@ -2389,7 +2406,6 @@ async function addAttendee(ranking) {
         }
 
         await dbInsert('attendees', {
-            burger_id: parseInt(ranking),
             result_id: resultId,
             name: name,
         });
@@ -2439,10 +2455,8 @@ async function editUnknownAttendee(ranking, oldName) {
         } else {
             // If not in DB yet (e.g., was just generated), create it
             await dbInsert('attendees', {
-                burger_id: parseInt(ranking),
                 result_id: resultId,
                 name: newName.trim(),
-                rating_id: null,
             });
         }
 
