@@ -171,6 +171,7 @@ async function loadRankings() {
         }
 
         burgerData = data.map(row => ({
+            'ResultId': row.id,  // Stable primary key - never changes
             'Ranking': String(row.ranking || ''),
             'Burger Rating': String(row.burger_rating || ''),
             'Restaurant': row.restaurant || '',
@@ -229,9 +230,13 @@ function renderTable(data) {
 function initTableControls() {
     const searchBox = document.getElementById('searchBox');
     const sortSelect = document.getElementById('sortSelect');
+    if (!searchBox || !sortSelect) return;
 
+    // Guard against duplicate listeners (this is called from loadRankings which runs many times)
+    if (searchBox._listenerAdded) return;
     searchBox.addEventListener('input', () => filterAndSort());
     sortSelect.addEventListener('change', () => filterAndSort());
+    searchBox._listenerAdded = true;
 }
 
 function filterAndSort() {
@@ -276,6 +281,18 @@ function parsePrice(priceStr) {
 // ============================================
 // ATTENDEES TRACKING
 // ============================================
+
+// Helper: Look up the stable result_id for a given ranking number
+function getResultIdForRanking(ranking) {
+    const burger = burgerData.find(b => String(b["Ranking"]) === String(ranking));
+    return burger ? burger["ResultId"] : null;
+}
+
+// Helper: Look up the current ranking for a given result_id
+function getRankingForResultId(resultId) {
+    const burger = burgerData.find(b => b["ResultId"] == resultId);
+    return burger ? burger["Ranking"] : null;
+}
 
 async function loadAttendeesData() {
     if (!isConfigured()) return;
@@ -349,8 +366,12 @@ async function loadAttendeesData() {
         });
 
         // Populate from attendees table first
+        // Use stable result_id to find current ranking (immune to ranking shifts)
         attendees.forEach(att => {
-            const ranking = att.burger_id;
+            const ranking = att.result_id
+                ? getRankingForResultId(att.result_id)
+                : String(att.burger_id);  // fallback for pre-migration rows
+            if (!ranking) return;  // orphaned attendee, skip
             if (!attendeesData[ranking]) attendeesData[ranking] = [];
             if (!attendeesData[ranking].includes(att.name)) {
                 attendeesData[ranking].push(att.name);
@@ -404,8 +425,10 @@ async function loadAttendeesData() {
 
                 if (unknownsNeeded > 0) {
                     // Check if Unknown placeholders already exist in DB for this burger
+                    const resultId = getResultIdForRanking(ranking);
                     const existingUnknowns = attendees.filter(a =>
-                        a.burger_id == ranking && a.name.startsWith('Unknown ')
+                        (resultId ? a.result_id == resultId : a.burger_id == ranking)
+                        && a.name.startsWith('Unknown ')
                     );
 
                     // Only create new Unknowns if we don't have enough
@@ -419,6 +442,7 @@ async function loadAttendeesData() {
                             try {
                                 await dbInsert('attendees', {
                                     burger_id: ranking,
+                                    result_id: resultId,
                                     name: unknownName,
                                     rating_id: null,
                                 });
@@ -440,19 +464,20 @@ async function loadAttendeesData() {
         }
 
         // Clean up stale "Unknown" attendees on non-historical burgers
-        // Find which burger_ids belong to historical burgers
-        const historicalBurgerIds = new Set();
+        // Use stable result_ids to identify historical burgers
+        const historicalResultIds = new Set();
         burgerData.forEach(row => {
             if (getHistoricalCount(row['Restaurant'], row['Description']) > 0) {
-                historicalBurgerIds.add(parseInt(row['Ranking']));
+                historicalResultIds.add(row['ResultId']);
             }
         });
         for (const att of attendees) {
-            if (att.name && att.name.startsWith('Unknown ') && !historicalBurgerIds.has(att.burger_id)) {
+            if (att.name && att.name.startsWith('Unknown ') && !historicalResultIds.has(att.result_id)) {
                 try {
                     await dbDelete('attendees', 'id', att.id);
-                    if (attendeesData[att.burger_id]) {
-                        attendeesData[att.burger_id] = attendeesData[att.burger_id].filter(n => n !== att.name);
+                    const attRanking = att.result_id ? getRankingForResultId(att.result_id) : String(att.burger_id);
+                    if (attRanking && attendeesData[attRanking]) {
+                        attendeesData[attRanking] = attendeesData[attRanking].filter(n => n !== att.name);
                     }
                 } catch (delErr) {
                     console.error('Failed to clean stale attendee:', delErr);
@@ -635,6 +660,56 @@ function closeAttendeesModal() {
 }
 
 // Initialize attendees modal close handler
+
+
+// ============================================
+// DATA EXPORT / BACKUP
+// ============================================
+
+async function exportAllData() {
+    const msg = document.getElementById('exportDataMsg');
+    if (msg) {
+        msg.textContent = 'Exporting...';
+        msg.className = 'form-message';
+    }
+
+    try {
+        const results = await dbSelect('results', 'select=*&order=ranking.asc');
+        const attendees = await dbSelect('attendees', 'select=*&order=result_id.asc,name.asc');
+        const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc');
+        const members = await dbSelect('members', 'select=*&order=name.asc');
+
+        const data = {
+            exported_at: new Date().toISOString(),
+            results: results,
+            attendees: attendees,
+            ratings: ratings,
+            members: members,
+        };
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'botmc-backup-' + new Date().toISOString().split('T')[0] + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        if (msg) {
+            msg.textContent = 'Export complete! Check your downloads folder.';
+            msg.className = 'form-message success';
+        }
+    } catch (err) {
+        console.error('Export error:', err);
+        if (msg) {
+            msg.textContent = 'Export failed: ' + err.message;
+            msg.className = 'form-message error';
+        }
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('attendeesModalClose')?.addEventListener('click', closeAttendeesModal);
     document.getElementById('attendeesModal')?.addEventListener('click', (e) => {
@@ -961,7 +1036,7 @@ async function handleFormSubmit(e) {
     msg.className = 'form-message';
 
     try {
-        const configData = await dbSelect('form_config', 'select=active_burger,is_open,active_burger_ranking&id=eq.1');
+        const configData = await dbSelect('form_config', 'select=active_burger,is_open,active_burger_ranking,active_burger_result_id&id=eq.1');
         const config = configData[0];
 
         if (!config || !config.is_open) {
@@ -1029,10 +1104,12 @@ async function handleFormSubmit(e) {
         // CRITICAL FIX: Use the ranking ID directly from form_config instead of label matching
         // This prevents attendees being routed to wrong burgers when labels don't match
         const ranking = config.active_burger_ranking;
+        const formResultId = config.active_burger_result_id;
         if (ranking) {
             try {
                 await dbInsert('attendees', {
                     burger_id: parseInt(ranking),
+                    result_id: formResultId ? parseInt(formResultId) : getResultIdForRanking(ranking),
                     name: rating.name,
                     rating_id: null,
                 });
@@ -1052,6 +1129,7 @@ async function handleFormSubmit(e) {
                 try {
                     await dbInsert('attendees', {
                         burger_id: parseInt(fallbackRanking),
+                        result_id: getResultIdForRanking(fallbackRanking),
                         name: rating.name,
                         rating_id: null,
                     });
@@ -1086,7 +1164,7 @@ async function handleFormSubmit(e) {
         }
 
         // Recalculate and update burger rating in results table
-        await updateBurgerRating(config.active_burger, config.active_burger_ranking);
+        await updateBurgerRating(config.active_burger, config.active_burger_ranking, formResultId);
     } catch (err) {
         console.error('Submit error:', err);
         msg.textContent = 'Failed to submit. Please try again.';
@@ -1099,7 +1177,7 @@ async function handleFormSubmit(e) {
 // UPDATE BURGER RATING
 // ============================================
 
-async function updateBurgerRating(burgerLabel, ranking) {
+async function updateBurgerRating(burgerLabel, ranking, resultId) {
     try {
         // Get all ratings for this burger
         const ratings = await dbSelect('ratings', `select=*&burger=eq.${encodeURIComponent(burgerLabel)}`);
@@ -1120,19 +1198,13 @@ async function updateBurgerRating(burgerLabel, ranking) {
             avgFlavor * 0.40
         ).toFixed(2);
 
-        // Use ranking directly to update results (avoids truncated label mismatch)
-        if (ranking) {
+        // Use stable result_id to update (immune to ranking shifts)
+        const updateId = resultId || getResultIdForRanking(ranking);
+        if (updateId) {
+            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', parseInt(updateId));
+        } else if (ranking) {
+            // Final fallback: use ranking directly
             await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', parseInt(ranking));
-        } else {
-            // Fallback: parse label and match by restaurant + description
-            const parts = burgerLabel.split(' — ');
-            const restaurant = parts[0];
-            const description = parts.length > 1 ? parts[1] : '';
-            const results = await dbSelect('results',
-                `select=*&restaurant=eq.${encodeURIComponent(restaurant)}&description=eq.${encodeURIComponent(description)}`);
-            if (results && results.length > 0) {
-                await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', results[0].ranking);
-            }
         }
 
         // Recalculate ALL rankings based on burger_rating (highest = #1)
@@ -1168,7 +1240,7 @@ async function recalculateAllRatings() {
                 const avgDoneness = matching.reduce((sum, r) => sum + (r.doneness || 0), 0) / matching.length;
                 const avgFlavor = matching.reduce((sum, r) => sum + (r.flavor || 0), 0) / matching.length;
                 const overallAvg = (avgToppings * 0.20 + avgBun * 0.20 + avgDoneness * 0.20 + avgFlavor * 0.40).toFixed(2);
-                await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', result.ranking);
+                await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', result.id);
                 updated++;
             }
         }
@@ -1184,15 +1256,8 @@ async function recalculateAllRatings() {
 
 async function recalculateRankings() {
     try {
-        // Get all results
         const all = await dbSelect('results', 'select=*');
         if (!all || all.length === 0) return;
-
-        // Save old ranking → result.id mapping (before any changes)
-        const oldRankToResultId = {};
-        all.forEach(entry => {
-            oldRankToResultId[entry.ranking] = entry.id;
-        });
 
         // Separate rated and unrated
         const rated = all.filter(r => r.burger_rating !== null && r.burger_rating !== undefined);
@@ -1201,44 +1266,23 @@ async function recalculateRankings() {
         // Sort rated by rating descending (highest rating = rank #1)
         rated.sort((a, b) => parseFloat(b.burger_rating) - parseFloat(a.burger_rating));
 
-        // Assign rankings and track result_id → new_ranking
-        const resultIdToNewRank = {};
+        // Assign new ranking numbers
         let rank = 1;
         for (const entry of rated) {
-            resultIdToNewRank[entry.id] = rank;
             if (entry.ranking !== rank) {
                 await dbUpdate('results', { ranking: rank }, 'id', entry.id);
             }
             rank++;
         }
         for (const entry of unrated) {
-            resultIdToNewRank[entry.id] = rank;
             if (entry.ranking !== rank) {
                 await dbUpdate('results', { ranking: rank }, 'id', entry.id);
             }
             rank++;
         }
 
-        // Remap attendees: if any rankings changed, update attendees.burger_id
-        // Build old_rank → new_rank via result_id
-        const rankChanges = {}; // old_rank → new_rank
-        for (const [oldRank, resultId] of Object.entries(oldRankToResultId)) {
-            const newRank = resultIdToNewRank[resultId];
-            if (newRank !== undefined && parseInt(oldRank) !== newRank) {
-                rankChanges[parseInt(oldRank)] = newRank;
-            }
-        }
-
-        if (Object.keys(rankChanges).length > 0) {
-            // Load all attendees (snapshot) and update those affected
-            const allAttendees = await dbSelect('attendees', 'select=*');
-            for (const att of allAttendees) {
-                const newBurgerId = rankChanges[att.burger_id];
-                if (newBurgerId !== undefined) {
-                    await dbUpdate('attendees', { burger_id: newBurgerId }, 'id', att.id);
-                }
-            }
-        }
+        // NO attendee remapping needed: attendees use stable result_id
+        // which never changes regardless of ranking shifts
     } catch (err) {
         console.error('Recalculate rankings error:', err);
     }
@@ -1300,6 +1344,7 @@ function initAdminPanel() {
             msg.className = 'form-message error';
         }
     });
+    document.getElementById('exportDataBtn')?.addEventListener('click', exportAllData);
     document.getElementById('newMemberName')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') { e.preventDefault(); addMemberAdmin(); }
     });
@@ -1829,10 +1874,12 @@ async function handleFormControl(open) {
             );
             if (selectedBurger) {
                 update.active_burger_ranking = parseInt(selectedBurger['Ranking']);
+                update.active_burger_result_id = selectedBurger['ResultId'];
             }
         } else {
             update.active_burger = null;
             update.active_burger_ranking = null;
+            update.active_burger_result_id = null;
         }
 
         await dbUpdate('form_config', update, 'id', 1);
@@ -1936,20 +1983,33 @@ async function deleteBurger(ranking, restaurant) {
     if (!confirm(`FINAL WARNING: This will permanently delete #${ranking} ${restaurant}. Are you absolutely sure?`)) return;
 
     try {
-        // Delete attendees for this burger BEFORE deleting the burger
-        await dbDelete('attendees', 'burger_id', ranking);
+        const resultId = getResultIdForRanking(ranking);
+
+        // Delete attendees by stable result_id
+        if (resultId) {
+            await dbDelete('attendees', 'result_id', resultId);
+        }
 
         // If the deleted burger was the active form burger, close the form
         try {
-            const formConfig = await dbSelect('form_config', 'select=active_burger_ranking,is_open&id=eq.1');
-            if (formConfig && formConfig[0] && formConfig[0].is_open && formConfig[0].active_burger_ranking == ranking) {
-                await dbUpdate('form_config', { is_open: false, active_burger: null, active_burger_ranking: null }, 'id', 1);
+            const formConfig = await dbSelect('form_config', 'select=active_burger_result_id,is_open&id=eq.1');
+            if (formConfig && formConfig[0] && formConfig[0].is_open &&
+                (formConfig[0].active_burger_result_id == resultId)) {
+                await dbUpdate('form_config', {
+                    is_open: false, active_burger: null,
+                    active_burger_ranking: null, active_burger_result_id: null
+                }, 'id', 1);
             }
         } catch (fcErr) {
             console.error('Failed to check/close form config:', fcErr);
         }
 
-        await dbDelete('results', 'ranking', ranking);
+        // Delete the burger by stable id
+        if (resultId) {
+            await dbDelete('results', 'id', resultId);
+        } else {
+            await dbDelete('results', 'ranking', ranking);
+        }
 
         // Recalculate rankings so there are no gaps (1, 2, 3... not 2, 3, 5...)
         await recalculateRankings();
@@ -2408,7 +2468,8 @@ async function addAttendee(ranking) {
 
     try {
         // Check for duplicate name on this burger
-        const existing = await dbSelect('attendees', `select=id&burger_id=eq.${parseInt(ranking)}&name=eq.${encodeURIComponent(name)}`);
+        const resultId = getResultIdForRanking(ranking);
+        const existing = await dbSelect('attendees', `select=id&result_id=eq.${resultId}&name=eq.${encodeURIComponent(name)}`);
         if (existing && existing.length > 0) {
             alert(name + ' is already listed for this burger.');
             return;
@@ -2416,6 +2477,7 @@ async function addAttendee(ranking) {
 
         await dbInsert('attendees', {
             burger_id: parseInt(ranking),
+            result_id: resultId,
             name: name,
         });
 
@@ -2434,7 +2496,8 @@ async function removeAttendee(ranking, name) {
 
     try {
         // Find and delete the attendee entry
-        const all = await dbSelect('attendees', `select=*&burger_id=eq.${ranking}&name=eq.${encodeURIComponent(name)}`);
+        const resultId = getResultIdForRanking(ranking);
+        const all = await dbSelect('attendees', `select=*&result_id=eq.${resultId}&name=eq.${encodeURIComponent(name)}`);
         if (all && all.length > 0) {
             await dbDelete('attendees', 'id', all[0].id);
         }
@@ -2455,7 +2518,8 @@ async function editUnknownAttendee(ranking, oldName) {
 
     try {
         // Find the attendee entry
-        const all = await dbSelect('attendees', `select=*&burger_id=eq.${ranking}&name=eq.${encodeURIComponent(oldName)}`);
+        const resultId = getResultIdForRanking(ranking);
+        const all = await dbSelect('attendees', `select=*&result_id=eq.${resultId}&name=eq.${encodeURIComponent(oldName)}`);
         if (all && all.length > 0) {
             // Update the name
             await dbUpdate('attendees', { name: newName.trim() }, 'id', all[0].id);
@@ -2463,6 +2527,7 @@ async function editUnknownAttendee(ranking, oldName) {
             // If not in DB yet (e.g., was just generated), create it
             await dbInsert('attendees', {
                 burger_id: parseInt(ranking),
+                result_id: resultId,
                 name: newName.trim(),
                 rating_id: null,
             });
@@ -2640,11 +2705,15 @@ async function loadMainAttendanceTracker() {
     trackerMemberCount = 2;
     renderTrackerSelects();
 
-    // Event listeners
+    // Event listeners (remove first to prevent stacking on repeated calls)
+    individualSelect.removeEventListener('change', showMainIndividualAttendance);
     individualSelect.addEventListener('change', showMainIndividualAttendance);
-    document.getElementById('mainTrackerCompareBtn')?.addEventListener('click', compareMainAttendance);
-    document.getElementById('addMemberBtn')?.addEventListener('click', addTrackerMember);
-    document.getElementById('clearMembersBtn')?.addEventListener('click', clearTrackerMembers);
+    const compareBtn = document.getElementById('mainTrackerCompareBtn');
+    const addBtn = document.getElementById('addMemberBtn');
+    const clearBtn = document.getElementById('clearMembersBtn');
+    if (compareBtn) { compareBtn.removeEventListener('click', compareMainAttendance); compareBtn.addEventListener('click', compareMainAttendance); }
+    if (addBtn) { addBtn.removeEventListener('click', addTrackerMember); addBtn.addEventListener('click', addTrackerMember); }
+    if (clearBtn) { clearBtn.removeEventListener('click', clearTrackerMembers); clearBtn.addEventListener('click', clearTrackerMembers); }
 }
 
 function renderTrackerSelects() {
