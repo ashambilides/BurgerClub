@@ -992,7 +992,6 @@ async function handleFormSubmit(e) {
             bun,
             doneness,
             flavor,
-            created_at: new Date().toISOString(),
         };
 
         // Upload photo if provided
@@ -1034,7 +1033,19 @@ async function handleFormSubmit(e) {
             return;
         }
 
-        await dbInsert('ratings', rating);
+        // Insert rating and verify the row actually landed in the database.
+        // This guards against silent failures (proxy/extension returning fake 200,
+        // network mid-flight drop, etc.) so the user is never told "submitted"
+        // when nothing was stored.
+        const insertResponse = await dbInsert('ratings', rating);
+        const insertedRow = Array.isArray(insertResponse) ? insertResponse[0] : insertResponse;
+        if (!insertedRow || !insertedRow.id) {
+            throw new Error('Insert returned no row — submission was not stored.');
+        }
+        const verifyRows = await dbSelect('ratings', `select=id&id=eq.${insertedRow.id}`);
+        if (!verifyRows || verifyRows.length === 0) {
+            throw new Error(`Insert verification failed for id=${insertedRow.id} — submission was not stored.`);
+        }
 
         // Add attendee automatically
         // CRITICAL FIX: Use the ranking ID directly from form_config instead of label matching
@@ -1108,7 +1119,8 @@ async function handleFormSubmit(e) {
         await updateBurgerRating(config.active_burger, config.active_burger_ranking, formResultId);
     } catch (err) {
         console.error('Submit error:', err);
-        msg.textContent = 'Failed to submit. Please try again.';
+        const detail = (err && err.message) ? err.message : String(err);
+        msg.textContent = 'Failed to submit: ' + detail + ' — please screenshot this and send to the admin.';
         msg.className = 'form-message error';
     }
     submitBtn.disabled = false;
