@@ -163,15 +163,19 @@ function initDelegatedHandlers() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
-    initDelegatedHandlers();
-    initNavigation();
-    initAdminPanel();
-    initLightbox();
+    // Each sync init is guarded so one missing/renamed element can't throw and
+    // blank the whole page — the main content (rankings) must always load.
+    const tryInit = (name, fn) => { try { fn(); } catch (e) { console.error(name + ' init failed:', e); } };
+
+    tryInit('delegatedHandlers', initDelegatedHandlers);
+    tryInit('navigation', initNavigation);
+    tryInit('adminPanel', initAdminPanel);
+    tryInit('lightbox', initLightbox);
 
     // Load rankings — this is the main content
     await loadRankings().catch(e => console.error('Rankings load failed:', e));
 
-    initMap();
+    tryInit('map', initMap);
 
     // Load members list
     await loadMembers().catch(e => console.error('Members load failed:', e));
@@ -179,7 +183,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Load secondary features in background
     loadGallery().catch(e => console.error('Gallery load failed:', e));
     checkFormStatus().catch(e => console.error('Form status check failed:', e));
-    initSuggestionForm();
+    tryInit('suggestionForm', initSuggestionForm);
     loadMainAttendanceTracker().catch(e => console.error('Main tracker load failed:', e));
 });
 
@@ -1850,15 +1854,19 @@ async function handleFormControl(open) {
         if (open) {
             update.active_burger = burgerLabel;
 
-            // CRITICAL FIX: Store the ranking ID to prevent attendee routing bugs
-            // Find the exact burger in burgerData using the full description (not truncated)
+            // Resolve the STABLE result_id. Refuse to open a form we can't pin to a
+            // specific burger — otherwise votes would route by fuzzy label matching,
+            // which can attach them to the WRONG burger at multi-burger venues.
             const selectedBurger = burgerData.find(b =>
                 b['Restaurant'] === burgerRestaurant && b['Description'] === burgerDesc
             );
-            if (selectedBurger) {
-                update.active_burger_ranking = parseInt(selectedBurger['Ranking']);
-                update.active_burger_result_id = selectedBurger['ResultId'];
+            if (!selectedBurger) {
+                msg.textContent = 'Could not match that burger to a record — reload the page and try again.';
+                msg.className = 'form-message error';
+                return;
             }
+            update.active_burger_ranking = parseInt(selectedBurger['Ranking']);
+            update.active_burger_result_id = selectedBurger['ResultId'];
         } else {
             update.active_burger = null;
             update.active_burger_ranking = null;
