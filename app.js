@@ -33,6 +33,21 @@ function writeHeaders(extra) {
     return h;
 }
 
+// If an admin write is rejected for auth reasons, the JWT has expired. Drop the
+// session and bounce back to the login screen so edits can NEVER silently fail.
+function handleWriteAuthError(status) {
+    if ((status === 401 || status === 403) && adminToken) {
+        adminToken = null;
+        adminLoggedIn = false;
+        const login = document.getElementById('adminLogin');
+        const content = document.getElementById('adminContent');
+        const err = document.getElementById('adminLoginError');
+        if (content) content.style.display = 'none';
+        if (login) login.style.display = 'block';
+        if (err) err.textContent = 'Your admin session expired — please log in again, then redo that action.';
+    }
+}
+
 async function dbSelect(table, query = '') {
     const res = await fetch(`${API_BASE}/${table}?${query}`, {
         headers: { ...API_HEADERS, 'Accept': 'application/json' },
@@ -47,7 +62,7 @@ async function dbInsert(table, data) {
         headers: writeHeaders({ 'Prefer': 'return=representation' }),
         body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error(`DB insert failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) { const t = await res.text(); handleWriteAuthError(res.status); throw new Error(`DB insert failed: ${res.status} ${t}`); }
     return res.json();
 }
 
@@ -57,7 +72,7 @@ async function dbUpdate(table, data, matchColumn, matchValue) {
         headers: writeHeaders({ 'Prefer': 'return=representation' }),
         body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error(`DB update failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) { const t = await res.text(); handleWriteAuthError(res.status); throw new Error(`DB update failed: ${res.status} ${t}`); }
     return res.json();
 }
 
@@ -66,7 +81,7 @@ async function dbDelete(table, matchColumn, matchValue) {
         method: 'DELETE',
         headers: writeHeaders(),
     });
-    if (!res.ok) throw new Error(`DB delete failed: ${res.status} ${await res.text()}`);
+    if (!res.ok) { const t = await res.text(); handleWriteAuthError(res.status); throw new Error(`DB delete failed: ${res.status} ${t}`); }
 }
 
 // Call a Postgres function (RPC). Throws an Error with `.status` set so callers
@@ -374,17 +389,18 @@ function ratingMatchesResult(rating, resultId, resultLabel) {
     return matchesBurgerLabel(rating.burger, resultLabel);
 }
 
-let _attendeesCache = { time: 0, promise: null };
+let _attendeesCache = { builtFor: null, promise: null };
 
 async function loadAttendeesData(forceRefresh = false) {
     if (!isConfigured()) return;
 
-    // Cache for 5 seconds to avoid redundant fetches during page load
-    const now = Date.now();
-    if (!forceRefresh && _attendeesCache.promise && (now - _attendeesCache.time) < 5000) {
+    // Reuse the result only while it was built against the CURRENT burgerData
+    // snapshot. burgerData is replaced on every loadRankings(), so this can never
+    // hand back attendee data computed against a stale burger list (= wrong people).
+    if (!forceRefresh && _attendeesCache.promise && _attendeesCache.builtFor === burgerData) {
         return _attendeesCache.promise;
     }
-    _attendeesCache.time = now;
+    _attendeesCache.builtFor = burgerData;
     _attendeesCache.promise = _loadAttendeesDataInner();
     return _attendeesCache.promise;
 }
@@ -1062,18 +1078,9 @@ async function handleFormSubmit(e) {
             return;
         }
 
-        const rating = {
-            burger: config.active_burger,
-            name: raterName,
-            toppings,
-            bun,
-            doneness,
-            flavor,
-        };
-
         // Check for duplicate submission (same person + same burger) BEFORE any
-        // photo upload, so a rejected duplicate never leaves an orphaned upload
-        // or gallery row behind (H3). (Phase 3's RPC makes this fully atomic.)
+        // photo upload, so a rejected duplicate never leaves an orphaned upload.
+        // (The RPC re-checks authoritatively; this is just a fast pre-check.)
         const existingRatings = await dbSelect('ratings', `select=id&burger=eq.${encodeURIComponent(config.active_burger)}&name=eq.${encodeURIComponent(raterName)}`);
         if (existingRatings && existingRatings.length > 0) {
             msg.textContent = 'You have already submitted a rating for this burger.';
@@ -1130,90 +1137,41 @@ async function handleFormSubmit(e) {
             }
         }
 
-        // Submit via the atomic submit_rating RPC (M1). If it isn't deployed yet
-        // (404), fall back to the legacy multi-step path so the site keeps working.
-        let submitted = false;
-        if (attendeeResultId) {
-            try {
-                const rpcRes = await rpcCall('submit_rating', {
-                    p_result_id: parseInt(attendeeResultId),
-                    p_name: raterName,
-                    p_toppings: toppings,
-                    p_bun: bun,
-                    p_doneness: doneness,
-                    p_flavor: flavor,
-                    p_burger: config.active_burger,
-                    p_photo_url: photoUrl,
-                    p_gallery_label: galleryLabel,
-                });
-                submitted = true;
-                if (rpcRes && rpcRes.status === 'duplicate') {
-                    msg.textContent = 'You have already submitted a rating for this burger.';
-                    msg.className = 'form-message error';
-                    submitBtn.disabled = false;
-                    return;
-                }
-                if (rpcRes && rpcRes.status === 'error') {
-                    throw new Error(rpcRes.message || 'Submission rejected.');
-                }
-            } catch (rpcErr) {
-                if (rpcErr && (rpcErr.status === 404 || rpcErr.status === 400)) {
-                    console.warn('submit_rating RPC unavailable, using legacy path:', rpcErr.message);
-                    submitted = false;
-                } else {
-                    throw rpcErr;
-                }
-            }
+        // Submit via the atomic submit_rating RPC — the single server-side write path.
+        // One transaction inserts the rating + attendee + gallery row + member and
+        // recomputes the burger's rating and ALL rankings. No client-side fallback:
+        // the RPC is the contract, and a failure must surface, not be papered over.
+        if (!attendeeResultId) {
+            throw new Error('Could not determine which burger this rating is for — tell the admin.');
+        }
+        const rpcRes = await rpcCall('submit_rating', {
+            p_result_id: parseInt(attendeeResultId),
+            p_name: raterName,
+            p_toppings: toppings,
+            p_bun: bun,
+            p_doneness: doneness,
+            p_flavor: flavor,
+            p_burger: config.active_burger,
+            p_photo_url: photoUrl,
+            p_gallery_label: galleryLabel,
+        });
+        if (rpcRes && rpcRes.status === 'duplicate') {
+            msg.textContent = 'You have already submitted a rating for this burger.';
+            msg.className = 'form-message error';
+            submitBtn.disabled = false;
+            return;
+        }
+        if (!rpcRes || rpcRes.status !== 'ok') {
+            throw new Error((rpcRes && rpcRes.message) || 'The server rejected the submission.');
         }
 
-        if (!submitted) {
-            // Legacy fallback path (pre-Phase-3 DB): do each write client-side.
-            if (photoUrl) {
-                rating.photo_url = photoUrl;
-                try {
-                    await dbInsert('gallery', {
-                        url: photoUrl,
-                        restaurant: galleryLabel,
-                        caption: `Rated by ${rating.name}`,
-                        uploaded_by: rating.name,
-                    });
-                } catch (gErr) {
-                    console.error('Gallery insert failed:', gErr);
-                }
-            }
-            // Insert and verify the row actually landed (guards against silent
-            // proxy/extension/network failures returning a fake 200).
-            const insertResponse = await dbInsert('ratings', rating);
-            const insertedRow = Array.isArray(insertResponse) ? insertResponse[0] : insertResponse;
-            if (!insertedRow || !insertedRow.id) {
-                throw new Error('Insert returned no row — submission was not stored.');
-            }
-            const verifyRows = await dbSelect('ratings', `select=id&id=eq.${insertedRow.id}`);
-            if (!verifyRows || verifyRows.length === 0) {
-                throw new Error(`Insert verification failed for id=${insertedRow.id} — submission was not stored.`);
-            }
-            if (attendeeResultId) {
-                try {
-                    await dbInsert('attendees', { result_id: parseInt(attendeeResultId), name: rating.name });
-                } catch (attendeeErr) {
-                    console.error('Failed to add attendee:', attendeeErr);
-                }
-            }
-            await updateBurgerRating(config.active_burger, config.active_burger_ranking, formResultId);
-        }
-
-        // New member: the RPC (or the legacy insert below) creates the member row;
-        // just make sure it exists and refresh the dropdown.
+        // New member: the RPC created the member row server-side; refresh the dropdown.
         if (raterSelect.value === '__new__' && raterName) {
             try {
-                if (!submitted) {
-                    await dbInsert('members', { name: raterName });
-                }
                 await loadMembers();
                 populateRaterNameSelect();
             } catch (memberErr) {
-                // Ignore duplicate error — member may already exist
-                console.warn('Member refresh (may already exist):', memberErr);
+                console.warn('Member refresh:', memberErr);
             }
         }
 
@@ -1224,17 +1182,12 @@ async function handleFormSubmit(e) {
         document.getElementById('newMemberGroup').style.display = 'none';
         document.getElementById('raterNameNew').required = false;
 
-        // Reload gallery if photo was uploaded
+        // The RPC recomputed ratings + rankings + attendees server-side; refresh the UI.
         if (photoUrl) {
             await loadGallery();
         }
-
-        // The RPC recomputed ratings + rankings server-side; refresh the UI.
-        // (The legacy path already refreshed via updateBurgerRating.)
-        if (submitted) {
-            await loadRankings();
-            rebuildMap();
-        }
+        await loadRankings();
+        rebuildMap();
     } catch (err) {
         console.error('Submit error:', err);
         const detail = (err && err.message) ? err.message : String(err);
@@ -1248,52 +1201,11 @@ async function handleFormSubmit(e) {
 // UPDATE BURGER RATING
 // ============================================
 
-async function updateBurgerRating(burgerLabel, ranking, resultId) {
-    try {
-        // Find the result to update via stable result_id
-        const updateId = resultId || getResultIdForRanking(ranking);
-        const result = burgerData.find(b => b['ResultId'] == updateId);
-        if (!result) return;
-
-        const fullLabel = (result['Restaurant'] || '') + ' — ' + (result['Description'] || '');
-
-        // Fetch all ratings and join by stable result_id (label fallback for legacy rows)
-        const allRatings = await dbSelect('ratings', 'select=*');
-        const matching = allRatings.filter(r => ratingMatchesResult(r, updateId, fullLabel));
-
-        if (matching.length === 0) return;
-
-        // Calculate average of each category across all raters
-        const avgToppings = matching.reduce((sum, r) => sum + (r.toppings || 0), 0) / matching.length;
-        const avgBun = matching.reduce((sum, r) => sum + (r.bun || 0), 0) / matching.length;
-        const avgDoneness = matching.reduce((sum, r) => sum + (r.doneness || 0), 0) / matching.length;
-        const avgFlavor = matching.reduce((sum, r) => sum + (r.flavor || 0), 0) / matching.length;
-
-        // Weighted scoring: Flavor 40%, Toppings 20%, Bun 20%, Doneness 20%
-        const overallAvg = (
-            avgToppings * 0.20 +
-            avgBun * 0.20 +
-            avgDoneness * 0.20 +
-            avgFlavor * 0.40
-        ).toFixed(2);
-
-        if (updateId) {
-            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', parseInt(updateId));
-        } else if (ranking) {
-            await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'ranking', parseInt(ranking));
-        }
-
-        // Recalculate ALL rankings based on burger_rating (highest = #1)
-        await recalculateRankings();
-
-        // Reload the rankings table and map to show updated rating
-        await loadRankings();
-        rebuildMap();
-    } catch (err) {
-        console.error('Update burger rating error:', err);
-    }
+// Single source of truth for the weighted burger score: 20% toppings/bun/doneness,
+// 40% flavor. Used by the admin recompute + displays; the server RPC mirrors this.
+function weightedScore(toppings, bun, doneness, flavor) {
+    return (toppings || 0) * 0.20 + (bun || 0) * 0.20 + (doneness || 0) * 0.20 + (flavor || 0) * 0.40;
 }
-
 
 async function recalculateAllRatings() {
     try {
@@ -1312,7 +1224,7 @@ async function recalculateAllRatings() {
                 const avgBun = matching.reduce((sum, r) => sum + (r.bun || 0), 0) / matching.length;
                 const avgDoneness = matching.reduce((sum, r) => sum + (r.doneness || 0), 0) / matching.length;
                 const avgFlavor = matching.reduce((sum, r) => sum + (r.flavor || 0), 0) / matching.length;
-                const overallAvg = (avgToppings * 0.20 + avgBun * 0.20 + avgDoneness * 0.20 + avgFlavor * 0.40).toFixed(2);
+                const overallAvg = weightedScore(avgToppings, avgBun, avgDoneness, avgFlavor).toFixed(2);
                 await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', result.id);
                 updated++;
             }
@@ -1335,9 +1247,11 @@ async function recalculateRankings() {
         // Separate rated and unrated
         const rated = all.filter(r => r.burger_rating !== null && r.burger_rating !== undefined);
         const unrated = all.filter(r => r.burger_rating === null || r.burger_rating === undefined);
+        unrated.sort((a, b) => a.id - b.id); // stable order matching the server RPC
 
-        // Sort rated by rating descending (highest rating = rank #1)
-        rated.sort((a, b) => parseFloat(b.burger_rating) - parseFloat(a.burger_rating));
+        // Sort rated by rating descending (highest = #1), tie-break by id ascending
+        // to exactly match the server RPC's ordering (so the two never disagree).
+        rated.sort((a, b) => (parseFloat(b.burger_rating) - parseFloat(a.burger_rating)) || (a.id - b.id));
 
         // Assign new ranking numbers
         let rank = 1;
@@ -1545,11 +1459,13 @@ async function loadAdminData() {
             `;
 
             for (const [burger, entries] of Object.entries(byBurger)) {
-                const avgT = (entries.reduce((s, r) => s + (r.toppings || 0), 0) / entries.length).toFixed(1);
-                const avgB = (entries.reduce((s, r) => s + (r.bun || 0), 0) / entries.length).toFixed(1);
-                const avgD = (entries.reduce((s, r) => s + (r.doneness || 0), 0) / entries.length).toFixed(1);
-                const avgF = (entries.reduce((s, r) => s + (r.flavor || 0), 0) / entries.length).toFixed(1);
-                const avgAll = (parseFloat(avgT) * 0.20 + parseFloat(avgB) * 0.20 + parseFloat(avgD) * 0.20 + parseFloat(avgF) * 0.40).toFixed(2);
+                const rawT = entries.reduce((s, r) => s + (r.toppings || 0), 0) / entries.length;
+                const rawB = entries.reduce((s, r) => s + (r.bun || 0), 0) / entries.length;
+                const rawD = entries.reduce((s, r) => s + (r.doneness || 0), 0) / entries.length;
+                const rawF = entries.reduce((s, r) => s + (r.flavor || 0), 0) / entries.length;
+                const avgT = rawT.toFixed(1), avgB = rawB.toFixed(1), avgD = rawD.toFixed(1), avgF = rawF.toFixed(1);
+                // Headline avg at FULL precision via the shared helper, so it matches the stored burger_rating
+                const avgAll = weightedScore(rawT, rawB, rawD, rawF).toFixed(2);
 
                 const burgerId = burger.replace(/[^a-zA-Z0-9]/g, '_');
                 html += `
@@ -1577,7 +1493,7 @@ async function loadAdminData() {
                                 </thead>
                                 <tbody>
                                     ${entries.map(r => {
-                                        const rowAvg = ((r.toppings || 0) * 0.20 + (r.bun || 0) * 0.20 + (r.doneness || 0) * 0.20 + (r.flavor || 0) * 0.40).toFixed(1);
+                                        const rowAvg = weightedScore(r.toppings, r.bun, r.doneness, r.flavor).toFixed(1);
                                         return `<tr data-name="${escapeHtml(r.name)}" data-date="${r.created_at}" data-avg="${rowAvg}">
                                             <td>${escapeHtml(r.name)}</td>
                                             <td>${r.toppings}</td>
@@ -2066,15 +1982,19 @@ async function deleteBurger(ranking, restaurant) {
             await dbDelete('attendees', 'result_id', resultId);
         }
 
-        // Delete associated ratings (prevent orphaned data)
+        // Delete associated ratings by STABLE result_id (never by fuzzy label — that
+        // could wipe a different burger's ratings). Legacy rows with no result_id are
+        // cleaned up separately and can only match this burger's exact label.
         if (resultId) {
             try {
+                await dbDelete('ratings', 'result_id', resultId);
                 const result = burgerData.find(b => b['ResultId'] == resultId);
                 if (result) {
                     const fullLabel = (result['Restaurant'] || '') + ' — ' + (result['Description'] || '');
-                    const allRatings = await dbSelect('ratings', 'select=id,burger');
-                    const orphaned = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
-                    for (const r of orphaned) {
+                    const allRatings = await dbSelect('ratings', 'select=id,burger,result_id');
+                    const legacyOrphans = allRatings.filter(r =>
+                        (r.result_id === null || r.result_id === undefined) && matchesBurgerLabel(r.burger, fullLabel));
+                    for (const r of legacyOrphans) {
                         await dbDelete('ratings', 'id', r.id);
                     }
                 }
