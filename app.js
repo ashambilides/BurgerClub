@@ -1425,26 +1425,33 @@ async function loadAdminData() {
         const ratings = await dbSelect('ratings', 'select=*&order=created_at.desc&limit=100');
         const ratingsDiv = document.getElementById('submittedRatings');
         if (ratings && ratings.length > 0) {
-            // Filter ratings to only include burgers that still exist in burgerData
-            const filteredRatings = ratings.filter(r => {
-                const burgerLabel = r.burger || '';
-                return burgerData.some(b => {
-                    const fullLabel = (b['Restaurant'] || '') + ' — ' + (b['Description'] || '');
-                    return matchesBurgerLabel(burgerLabel, fullLabel);
-                });
+            // Map each rating to a STABLE result_id (label fallback for legacy rows),
+            // then group by the burger's CURRENT label. Grouping by the raw stored
+            // label could hide or double-list a burger whose label later drifted.
+            const resultIdToLabel = {};
+            burgerData.forEach(b => {
+                resultIdToLabel[b['ResultId']] = `${b['Restaurant']} — ${b['Description']}`;
+            });
+            const labelForRating = (r) => {
+                if (r.result_id != null && resultIdToLabel[r.result_id]) return resultIdToLabel[r.result_id];
+                for (const b of burgerData) {
+                    const fullLabel = `${b['Restaurant'] || ''} — ${b['Description'] || ''}`;
+                    if (matchesBurgerLabel(r.burger || '', fullLabel)) return fullLabel;
+                }
+                return null; // rating for a burger that no longer exists
+            };
+
+            const byBurger = {};
+            ratings.forEach(r => {
+                const label = labelForRating(r);
+                if (!label) return;
+                if (!byBurger[label]) byBurger[label] = [];
+                byBurger[label].push(r);
             });
 
-            if (filteredRatings.length === 0) {
+            if (Object.keys(byBurger).length === 0) {
                 ratingsDiv.innerHTML = '<p style="color:#999;">No ratings for current burgers.</p>';
             } else {
-
-            // Group by burger for summary
-            const byBurger = {};
-            filteredRatings.forEach(r => {
-                const key = r.burger || 'Unknown';
-                if (!byBurger[key]) byBurger[key] = [];
-                byBurger[key].push(r);
-            });
 
             // Build interactive ratings table with search, sort, collapse
             let html = `

@@ -13,13 +13,15 @@ begin;
 -- and it still tests every table write (just not the RLS-bypass aspect).
 set local role anon;
 
+-- Positional args with an explicit ::int cast on the id (the SQL editor needs it;
+-- the website's API call does not).
 select public.submit_rating(
-    p_result_id     => (select id from public.results order by id limit 1),
-    p_name          => '__selftest_delete_me__',
-    p_toppings      => 6, p_bun => 6, p_doneness => 6, p_flavor => 6,
-    p_burger        => 'SELF TEST',
-    p_photo_url     => 'https://yezihsgtccwitfwgwudv.supabase.co/storage/v1/object/public/photos/selftest.jpg',
-    p_gallery_label => 'SELF TEST'
+    (select id from public.results order by id limit 1)::int,  -- p_result_id
+    '__selftest_delete_me__',                                  -- p_name
+    6, 6, 6, 6,                                                -- toppings, bun, doneness, flavor
+    'SELF TEST',                                               -- p_burger
+    'https://yezihsgtccwitfwgwudv.supabase.co/storage/v1/object/public/photos/selftest.jpg',
+    'SELF TEST'                                                -- p_gallery_label
 ) as rpc_result;   -- EXPECT: {"status": "ok", "result_id": ...}
 
 reset role;
