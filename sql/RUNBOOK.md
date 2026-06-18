@@ -69,76 +69,33 @@ Supabase steps are done.
 
 ---
 
-## Phase 4 client diffs (apply at step 5)
+## Phase 4 client — ALREADY APPLIED in code
 
-### `config.js`
-```diff
--    // Admin password hash (default: "password")
--    // To change: use the admin panel's Settings tab, or
--    // generate a new hash at the browser console: await hashPassword('yournewpassword')
--    ADMIN_PASSWORD_HASH: '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',
-+    // Admin identity — authentication is enforced by Supabase Auth + RLS, not here.
-+    // Create this user in Supabase > Authentication > Users. Change the password there.
-+    ADMIN_EMAIL: 'admin@botmc.local',
-```
-Also bump `config.js?v=18` → `v=19` in `index.html`.
+The Phase 4 client cutover is implemented (multi-user, no hardcoded email):
+- `config.js`: `ADMIN_PASSWORD_HASH` removed (no secret in the repo).
+- `app.js`: `adminToken` + `writeHeaders()` route admin writes with the Auth JWT;
+  `dbInsert/dbUpdate/dbDelete` use it; `dbSelect`/`rpcCall` stay anon.
+- Admin login (`handleAdminLogin`) now POSTs **email + password** to Supabase Auth
+  (`/auth/v1/token?grant_type=password`); `index.html` gained an email field. Any user
+  you add in Supabase can log in — no shared password, clean handover.
+- In-app "change password" is retired (manage users in the dashboard).
+- Cache-busters bumped: `config.js?v=19`, `app.js?v=46`.
 
-### `app.js` — module state (near the top, by `let adminLoggedIn = false;`)
-```js
-let adminToken = null; // Supabase Auth JWT for the admin session
-```
+### What YOU still do for the lockdown
+1. **Supabase → Authentication → Users → Add user** for each admin (you + the other
+   member). Check **"Auto Confirm User"** so the password grant works immediately.
+2. **Authentication → Providers → Email:** turn **OFF** "Allow new users to sign up"
+   (so strangers can't self-register an authenticated account).
+3. Deploy the current code (done by the assistant), then **log in on the live site** to
+   confirm your Auth user works.
+4. Run **`03_phase4_rls_and_auth.sql`** to lock down RLS + drop `admin_hash`.
+5. Verify anon writes are blocked (queries in that SQL file).
 
-### `app.js` — authenticated write headers
-Add a helper next to `API_HEADERS`, and route the three write helpers through it so
-admin writes carry the JWT (anon writes will be correctly denied by RLS):
-```js
-function writeHeaders(extra) {
-    const h = { ...API_HEADERS, ...(extra || {}) };
-    if (adminToken) h['Authorization'] = `Bearer ${adminToken}`;
-    return h;
-}
-```
-In `dbInsert`, `dbUpdate`, `dbDelete`, replace `API_HEADERS` with `writeHeaders()`
-(keep the `'Prefer'` extras, e.g. `writeHeaders({ 'Prefer': 'return=representation' })`).
-Leave `dbSelect` and `rpcCall` on `API_HEADERS` (public read + anon voting).
+Ordering note: deploying this client *before* running `03_…sql` is safe — voting uses the
+RPC and admin uses the JWT, so nothing breaks while RLS is still open.
 
-### `app.js` — replace `handleAdminLogin` (the SHA-256 + `admin_hash` version)
-```js
-async function handleAdminLogin() {
-    const password = document.getElementById('adminPassword').value;
-    const errorEl = document.getElementById('adminLoginError');
-    if (!password) { errorEl.textContent = 'Please enter a password.'; return; }
-    try {
-        const res = await fetch(`${CONFIG.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-            method: 'POST',
-            headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: CONFIG.ADMIN_EMAIL, password }),
-        });
-        if (!res.ok) { errorEl.textContent = 'Incorrect password.'; return; }
-        const data = await res.json();
-        adminToken = data.access_token;
-        adminLoggedIn = true;
-        errorEl.textContent = '';
-        document.getElementById('adminLogin').style.display = 'none';
-        document.getElementById('adminContent').style.display = 'block';
-        loadAdminData();
-    } catch (e) {
-        console.error('Admin login error:', e);
-        errorEl.textContent = 'Login failed. Try again.';
-    }
-}
-```
-
-### `app.js` — retire the in-app password change (`handleChangePassword`)
-Password changes now happen in the Supabase dashboard. Replace the body with a notice:
-```js
-async function handleChangePassword() {
-    const msg = document.getElementById('changePasswordMsg');
-    msg.textContent = 'Change the admin password in Supabase > Authentication > Users.';
-    msg.className = 'form-message';
-}
-```
-`hashPassword()` is then unused and can be deleted (optional).
-
-### After applying
-Bump `app.js?v=45` → `v=46` in `index.html`, then deploy (runbook steps 6–7).
+### Handover later
+Transfer the **Supabase project** (dashboard → Project Settings → General → Transfer) and
+the **GitHub repo** ownership. The new owner then manages admin users in Supabase. Nothing
+sensitive lives in the repo — the only credential is the public anon key, which RLS renders
+harmless for writes.

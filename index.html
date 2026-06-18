@@ -243,8 +243,12 @@
             <!-- Login -->
             <div id="adminLogin" class="admin-section">
                 <div class="form-group">
+                    <label for="adminEmail">Admin Email</label>
+                    <input type="email" id="adminEmail" placeholder="Enter admin email" autocomplete="username">
+                </div>
+                <div class="form-group">
                     <label for="adminPassword">Admin Password</label>
-                    <input type="password" id="adminPassword" placeholder="Enter admin password">
+                    <input type="password" id="adminPassword" placeholder="Enter admin password" autocomplete="current-password">
                 </div>
                 <button class="btn btn-primary" id="adminLoginBtn">Login</button>
                 <p id="adminLoginError" class="error-text"></p>
@@ -438,7 +442,7 @@
     </footer>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="config.js?v=18"></script>
-    <script src="app.js?v=45"></script>
+    <script src="config.js?v=19"></script>
+    <script src="app.js?v=46"></script>
 </body>
 </html>

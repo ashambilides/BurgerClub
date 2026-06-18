@@ -8,6 +8,7 @@ let galleryPhotos = [];
 let lightboxIndex = 0;
 let map;
 let adminLoggedIn = false;
+let adminToken = null; // Supabase Auth JWT for the admin session (C1)
 let attendeesData = {}; // Maps ranking -> array of names
 let membersData = []; // Array of member name strings from 'members' table
 
@@ -23,6 +24,15 @@ const API_HEADERS = {
     'Content-Type': 'application/json',
 };
 
+// Headers for privileged writes: carry the admin JWT when logged in, so RLS
+// grants the write to the `authenticated` role. Anon writes (suggestions,
+// requests, the voting RPC) fall through to the anon key, as intended.
+function writeHeaders(extra) {
+    const h = { ...API_HEADERS, ...(extra || {}) };
+    if (adminToken) h['Authorization'] = `Bearer ${adminToken}`;
+    return h;
+}
+
 async function dbSelect(table, query = '') {
     const res = await fetch(`${API_BASE}/${table}?${query}`, {
         headers: { ...API_HEADERS, 'Accept': 'application/json' },
@@ -34,7 +44,7 @@ async function dbSelect(table, query = '') {
 async function dbInsert(table, data) {
     const res = await fetch(`${API_BASE}/${table}`, {
         method: 'POST',
-        headers: { ...API_HEADERS, 'Prefer': 'return=representation' },
+        headers: writeHeaders({ 'Prefer': 'return=representation' }),
         body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error(`DB insert failed: ${res.status} ${await res.text()}`);
@@ -44,7 +54,7 @@ async function dbInsert(table, data) {
 async function dbUpdate(table, data, matchColumn, matchValue) {
     const res = await fetch(`${API_BASE}/${table}?${matchColumn}=eq.${matchValue}`, {
         method: 'PATCH',
-        headers: { ...API_HEADERS, 'Prefer': 'return=representation' },
+        headers: writeHeaders({ 'Prefer': 'return=representation' }),
         body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error(`DB update failed: ${res.status} ${await res.text()}`);
@@ -54,7 +64,7 @@ async function dbUpdate(table, data, matchColumn, matchValue) {
 async function dbDelete(table, matchColumn, matchValue) {
     const res = await fetch(`${API_BASE}/${table}?${matchColumn}=eq.${matchValue}`, {
         method: 'DELETE',
-        headers: API_HEADERS,
+        headers: writeHeaders(),
     });
     if (!res.ok) throw new Error(`DB delete failed: ${res.status} ${await res.text()}`);
 }
@@ -1439,36 +1449,38 @@ function initAdminPanel() {
 }
 
 async function handleAdminLogin() {
+    const email = document.getElementById('adminEmail').value.trim();
     const password = document.getElementById('adminPassword').value;
     const errorEl = document.getElementById('adminLoginError');
 
-    if (!password) {
-        errorEl.textContent = 'Please enter a password.';
+    if (!email || !password) {
+        errorEl.textContent = 'Please enter your email and password.';
         return;
     }
 
-    const hash = await hashPassword(password);
-    let storedHash = CONFIG.ADMIN_PASSWORD_HASH;
-
-    if (isConfigured()) {
-        try {
-            const data = await dbSelect('form_config', 'select=admin_hash&id=eq.1');
-            if (data[0] && data[0].admin_hash) {
-                storedHash = data[0].admin_hash;
-            }
-        } catch (e) {
-            // Fall back to config hash
+    try {
+        // Authenticate against Supabase Auth (GoTrue). Any user you add in
+        // Supabase > Authentication > Users can log in here; the returned JWT maps
+        // to the `authenticated` role, which RLS grants write access to (C1).
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+            method: 'POST',
+            headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+            errorEl.textContent = 'Incorrect password.';
+            return;
         }
-    }
-
-    if (hash === storedHash) {
+        const data = await res.json();
+        adminToken = data.access_token;
         adminLoggedIn = true;
         errorEl.textContent = '';
         document.getElementById('adminLogin').style.display = 'none';
         document.getElementById('adminContent').style.display = 'block';
         loadAdminData();
-    } else {
-        errorEl.textContent = 'Incorrect password.';
+    } catch (e) {
+        console.error('Admin login error:', e);
+        errorEl.textContent = 'Login failed. Please try again.';
     }
 }
 
@@ -2108,36 +2120,10 @@ async function deleteBurger(ranking, restaurant) {
 
 async function handleChangePassword() {
     const msg = document.getElementById('changePasswordMsg');
-    const newPw = document.getElementById('newAdminPassword').value;
-    const confirmPw = document.getElementById('confirmAdminPassword').value;
-
-    if (!newPw || newPw.length < 4) {
-        msg.textContent = 'Password must be at least 4 characters.';
-        msg.className = 'form-message error';
-        return;
-    }
-
-    if (newPw !== confirmPw) {
-        msg.textContent = 'Passwords do not match.';
-        msg.className = 'form-message error';
-        return;
-    }
-
-    const hash = await hashPassword(newPw);
-
-    if (isConfigured()) {
-        try {
-            await dbUpdate('form_config', { admin_hash: hash }, 'id', 1);
-            msg.textContent = 'Password changed!';
-            msg.className = 'form-message success';
-        } catch (err) {
-            msg.textContent = 'Failed to save: ' + err.message;
-            msg.className = 'form-message error';
-        }
-    } else {
-        msg.textContent = `Password hash: ${hash} — Update ADMIN_PASSWORD_HASH in config.js`;
-        msg.className = 'form-message success';
-    }
+    // Admin auth is handled by Supabase Auth now — change the password in the
+    // Supabase dashboard (Authentication > Users), not here.
+    msg.textContent = 'Change the admin password in Supabase → Authentication → Users.';
+    msg.className = 'form-message';
 }
 
 // ============================================
