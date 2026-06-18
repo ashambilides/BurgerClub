@@ -437,7 +437,7 @@ async function _loadAttendeesDataInner() {
         attendees.forEach(att => {
             if (!att.result_id) return;            // Skip entries without stable result_id
             if (!(att.result_id in attendeesData)) return;  // orphaned attendee, skip
-            if (!attendeesData[att.result_id].includes(att.name)) {
+            if (!attendeesData[att.result_id].some(n => n.toLowerCase() === att.name.toLowerCase())) {
                 attendeesData[att.result_id].push(att.name);
             }
         });
@@ -468,8 +468,8 @@ async function _loadAttendeesDataInner() {
 
             if (!attendeesData[resultId]) attendeesData[resultId] = [];
 
-            // Only add if not already in attendees list
-            if (r.name && !attendeesData[resultId].includes(r.name)) {
+            // Only add if not already present (case-insensitive — "jake" == "Jake")
+            if (r.name && !attendeesData[resultId].some(n => n.toLowerCase() === r.name.toLowerCase())) {
                 attendeesData[resultId].push(r.name);
             }
         });
@@ -921,6 +921,7 @@ function navigateLightbox(dir) {
 
 function updateLightbox() {
     const photo = galleryPhotos[lightboxIndex];
+    if (!photo) return; // guard against the array shrinking while the lightbox is open
     document.getElementById('lightboxImg').src = photo.url;
 
     // Always try to look up the full description from burgerData
@@ -1231,6 +1232,9 @@ async function recalculateAllRatings() {
                 const overallAvg = weightedScore(avgToppings, avgBun, avgDoneness, avgFlavor).toFixed(2);
                 await dbUpdate('results', { burger_rating: parseFloat(overallAvg) }, 'id', result.id);
                 updated++;
+            } else if (result.burger_rating !== null && result.burger_rating !== undefined) {
+                // Burger lost all its ratings — clear the now-stale score
+                await dbUpdate('results', { burger_rating: null }, 'id', result.id);
             }
         }
 
@@ -1240,6 +1244,7 @@ async function recalculateAllRatings() {
         return updated;
     } catch (err) {
         console.error('Recalculate all ratings error:', err);
+        throw err; // surface to the caller so a failure isn't shown as success
     }
 }
 
@@ -1276,6 +1281,7 @@ async function recalculateRankings() {
         // which never changes regardless of ranking shifts
     } catch (err) {
         console.error('Recalculate rankings error:', err);
+        throw err; // surface to the caller (recalc button / deleteBurger) instead of a silent fail
     }
 }
 
