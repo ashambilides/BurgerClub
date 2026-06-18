@@ -59,6 +59,22 @@ async function dbDelete(table, matchColumn, matchValue) {
     if (!res.ok) throw new Error(`DB delete failed: ${res.status} ${await res.text()}`);
 }
 
+// Call a Postgres function (RPC). Throws an Error with `.status` set so callers
+// can distinguish "not deployed yet" (404) from real failures.
+async function rpcCall(fn, params) {
+    const res = await fetch(`${API_BASE}/rpc/${fn}`, {
+        method: 'POST',
+        headers: API_HEADERS,
+        body: JSON.stringify(params),
+    });
+    if (!res.ok) {
+        const err = new Error(`RPC ${fn} failed: ${res.status} ${await res.text()}`);
+        err.status = res.status;
+        throw err;
+    }
+    return res.json();
+}
+
 async function storageUpload(bucket, path, file) {
 
     const res = await fetch(`${STORAGE_BASE}/object/${bucket}/${path}`, {
@@ -75,8 +91,46 @@ async function storageUpload(bucket, path, file) {
     return `${CONFIG.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
 }
 
+// Build a safe storage object name. Never trust the user-supplied file.name
+// (it can contain path traversal, control characters, etc.) — derive the
+// extension from the MIME type against an allow-list and generate the rest.
+function safeStorageName(prefix, file) {
+    const extByMime = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+    const allowed = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+    let ext = extByMime[file.type];
+    if (!ext) {
+        const m = /\.([a-z0-9]{1,5})$/i.exec(file.name || '');
+        ext = m ? m[1].toLowerCase() : 'jpg';
+    }
+    if (!allowed.includes(ext)) ext = 'jpg';
+    const token = Math.random().toString(36).slice(2, 10);
+    return `${prefix}/${Date.now()}_${token}.${ext}`;
+}
+
 function isConfigured() {
     return CONFIG.SUPABASE_URL && CONFIG.SUPABASE_URL !== 'YOUR_SUPABASE_URL';
+}
+
+// Delegated click handler — dispatches data-action elements to their handlers.
+// Keeps user-controlled data (names, restaurants) out of inline JS, closing the
+// stored-XSS vector from hand-built onclick="fn('${name}')" strings.
+function initDelegatedHandlers() {
+    document.addEventListener('click', (e) => {
+        const el = e.target.closest('[data-action]');
+        if (!el) return;
+        const d = el.dataset;
+        switch (d.action) {
+            case 'show-attendees':        showAttendees(d.resultId); break;
+            case 'edit-member':           editMemberAdmin(d.name); break;
+            case 'remove-member':         removeMemberAdmin(d.name); break;
+            case 'delete-burger':         deleteBurger(parseInt(d.ranking, 10), d.restaurant); break;
+            case 'delete-suggestion':     deleteSuggestion(parseInt(d.id, 10), d.name); break;
+            case 'delete-request':        deleteRequest(parseInt(d.id, 10), d.name); break;
+            case 'add-attendee':          addAttendee(d.resultId); break;
+            case 'edit-unknown-attendee': editUnknownAttendee(d.resultId, d.name); break;
+            case 'remove-attendee':       removeAttendee(d.resultId, d.name); break;
+        }
+    });
 }
 
 // ============================================
@@ -84,6 +138,7 @@ function isConfigured() {
 // ============================================
 
 document.addEventListener('DOMContentLoaded', async () => {
+    initDelegatedHandlers();
     initNavigation();
     initAdminPanel();
     initLightbox();
@@ -201,8 +256,7 @@ function renderTable(data) {
         </thead>
         <tbody>
             ${data.map(row => {
-                const ranking = row['Ranking'];
-                const attendees = attendeesData[ranking] || [];
+                const attendees = attendeesData[row['ResultId']] || [];
                 const count = attendees.length;
 
                 return `<tr>
@@ -213,7 +267,7 @@ function renderTable(data) {
                     <td>${escapeHtml(row['Price'])}</td>
                     <td>${escapeHtml(row['Location'])}</td>
                     <td>${escapeHtml(row['Date of Visit'])}</td>
-                    <td class="attendees-cell" onclick="showAttendees(${ranking})" style="cursor:pointer;color:var(--red);font-weight:500;">
+                    <td class="attendees-cell" data-action="show-attendees" data-result-id="${escapeHtml(row['ResultId'])}" style="cursor:pointer;color:var(--red);font-weight:500;">
                         ${count > 0 ? count : '—'}
                     </td>
                 </tr>`;
@@ -291,12 +345,23 @@ function getRankingForResultId(resultId) {
 
 // Helper: Match a rating's burger label to a result's full label
 // Handles exact matches and truncated labels (ending with "...")
+// NOTE: legacy fallback only — prefer ratingMatchesResult() which uses result_id.
 function matchesBurgerLabel(ratingBurger, resultLabel) {
     if (!ratingBurger || !resultLabel) return false;
     if (ratingBurger === resultLabel) return true;
     const cleanRating = ratingBurger.replace(/\.\.\.$/,'');
     const cleanResult = resultLabel.replace(/\.\.\.$/,'');
     return resultLabel.startsWith(cleanRating) || ratingBurger.startsWith(cleanResult);
+}
+
+// Match a rating to a result by STABLE result_id when present (H1), falling back
+// to fuzzy label matching only for legacy rows whose result_id wasn't backfilled.
+// Safe before and after the ratings.result_id column exists: undefined → fallback.
+function ratingMatchesResult(rating, resultId, resultLabel) {
+    if (rating.result_id !== null && rating.result_id !== undefined) {
+        return String(rating.result_id) === String(resultId);
+    }
+    return matchesBurgerLabel(rating.burger, resultLabel);
 }
 
 let _attendeesCache = { time: 0, promise: null };
@@ -325,55 +390,57 @@ async function _loadAttendeesDataInner() {
         // Clear existing data
         attendeesData = {};
 
-        // Initialize all burgers with empty arrays
+        // Initialize all burgers with empty arrays, keyed by STABLE result_id
+        // (ResultId never changes; ranking does — see active-burger-ranking-stale)
         burgerData.forEach(row => {
-            attendeesData[row['Ranking']] = [];
+            attendeesData[row['ResultId']] = [];
         });
 
-        // Build map: burger label -> ranking
-        const burgerToRanking = {};
+        // Build map: burger label -> result_id
+        const burgerToResultId = {};
         burgerData.forEach(row => {
             const label = `${row['Restaurant']} — ${row['Description']}`;
-            burgerToRanking[label] = row['Ranking'];
+            burgerToResultId[label] = row['ResultId'];
         });
 
-        // Populate from attendees table first
-        // Use stable result_id to find current ranking (immune to ranking shifts)
+        // Populate from attendees table first, using the stable result_id directly
         attendees.forEach(att => {
-            if (!att.result_id) return;  // Skip entries without stable result_id
-            const ranking = getRankingForResultId(att.result_id);
-            if (!ranking) return;  // orphaned attendee, skip
-            if (!attendeesData[ranking]) attendeesData[ranking] = [];
-            if (!attendeesData[ranking].includes(att.name)) {
-                attendeesData[ranking].push(att.name);
+            if (!att.result_id) return;            // Skip entries without stable result_id
+            if (!(att.result_id in attendeesData)) return;  // orphaned attendee, skip
+            if (!attendeesData[att.result_id].includes(att.name)) {
+                attendeesData[att.result_id].push(att.name);
             }
         });
 
         // Add names from ratings (auto-populate for ALL ratings regardless of label match)
-        // This ensures historical entries get their attendees populated
+        // This ensures historical entries get their attendees populated.
+        // NOTE: until ratings.result_id ships (Phase 2/H1), we still resolve via label.
         ratings.forEach(r => {
-            const burgerLabel = r.burger;
-            let ranking = burgerToRanking[burgerLabel];
-
-            // If exact match fails, try prefix matching (handles truncated labels)
-            if (!ranking && burgerLabel) {
-                for (const [fullLabel, rank] of Object.entries(burgerToRanking)) {
-                    if (matchesBurgerLabel(burgerLabel, fullLabel)) {
-                        ranking = rank;
-                        break;
+            // Prefer the stable result_id (H1); fall back to label for legacy rows
+            let resultId = (r.result_id != null && (r.result_id in attendeesData)) ? r.result_id : null;
+            if (!resultId) {
+                const burgerLabel = r.burger;
+                resultId = burgerToResultId[burgerLabel];
+                // If exact match fails, try prefix matching (handles truncated labels)
+                if (!resultId && burgerLabel) {
+                    for (const [fullLabel, rid] of Object.entries(burgerToResultId)) {
+                        if (matchesBurgerLabel(burgerLabel, fullLabel)) {
+                            resultId = rid;
+                            break;
+                        }
                     }
                 }
             }
 
-            if (!ranking) {
+            if (!resultId) {
                 return;
             }
 
-            if (!attendeesData[ranking]) attendeesData[ranking] = [];
+            if (!attendeesData[resultId]) attendeesData[resultId] = [];
 
             // Only add if not already in attendees list
-            if (r.name && !attendeesData[ranking].includes(r.name)) {
-                attendeesData[ranking].push(r.name);
+            if (r.name && !attendeesData[resultId].includes(r.name)) {
+                attendeesData[resultId].push(r.name);
             }
         });
 
@@ -436,8 +503,8 @@ async function loadMembersManager() {
 
     container.innerHTML = membersData.map(name => `
         <div class="attendee-tag">
-            <span onclick="editMemberAdmin('${escapeHtml(name).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="Click to edit name">${escapeHtml(name)} ✏️</span>
-            <button class="tag-remove" onclick="removeMemberAdmin('${escapeHtml(name).replace(/'/g, "\\'")}')" title="Remove member">×</button>
+            <span data-action="edit-member" data-name="${escapeHtml(name)}" style="cursor:pointer;" title="Click to edit name">${escapeHtml(name)} ✏️</span>
+            <button class="tag-remove" data-action="remove-member" data-name="${escapeHtml(name)}" title="Remove member">×</button>
         </div>
     `).join('');
 }
@@ -512,9 +579,9 @@ async function editMemberAdmin(oldName) {
     }
 }
 
-function showAttendees(ranking) {
-    const attendees = attendeesData[ranking] || [];
-    const burger = burgerData.find(b => b['Ranking'] == ranking);
+function showAttendees(resultId) {
+    const attendees = attendeesData[resultId] || [];
+    const burger = burgerData.find(b => String(b['ResultId']) === String(resultId));
 
     const modal = document.getElementById('attendeesModal');
     const title = document.getElementById('attendeesModalTitle');
@@ -994,37 +1061,9 @@ async function handleFormSubmit(e) {
             flavor,
         };
 
-        // Upload photo if provided
-        const photoFile = document.getElementById('photoUpload').files[0];
-        if (photoFile) {
-            try {
-                const fileName = `ratings/${Date.now()}_${photoFile.name}`;
-                const publicUrl = await storageUpload('photos', fileName, photoFile);
-                rating.photo_url = publicUrl;
-
-                // Also add to gallery with photo attribution
-                // Build clean label: "Restaurant" or "Restaurant - BURGER TYPE" for multi-burger venues
-                const gParts = (config.active_burger || '').split(' — ');
-                let galleryLabel = gParts[0];
-                if (gParts.length > 1) {
-                    const sameRest = burgerData.filter(b => b['Restaurant'] === gParts[0]);
-                    if (sameRest.length > 1) {
-                        const shortDesc = gParts[1].split(' - ')[0].trim();
-                        galleryLabel += ' - ' + (shortDesc.length > 40 ? shortDesc.substring(0, 37) + '...' : shortDesc);
-                    }
-                }
-                await dbInsert('gallery', {
-                    url: publicUrl,
-                    restaurant: galleryLabel,
-                    caption: `Rated by ${rating.name}`,
-                    uploaded_by: rating.name,
-                });
-            } catch (uploadErr) {
-                console.error('Photo upload failed, submitting without photo:', uploadErr);
-            }
-        }
-
-        // Check for duplicate submission (same person + same burger)
+        // Check for duplicate submission (same person + same burger) BEFORE any
+        // photo upload, so a rejected duplicate never leaves an orphaned upload
+        // or gallery row behind (H3). (Phase 3's RPC makes this fully atomic.)
         const existingRatings = await dbSelect('ratings', `select=id&burger=eq.${encodeURIComponent(config.active_burger)}&name=eq.${encodeURIComponent(raterName)}`);
         if (existingRatings && existingRatings.length > 0) {
             msg.textContent = 'You have already submitted a rating for this burger.';
@@ -1033,73 +1072,138 @@ async function handleFormSubmit(e) {
             return;
         }
 
-        // Insert rating and verify the row actually landed in the database.
-        // This guards against silent failures (proxy/extension returning fake 200,
-        // network mid-flight drop, etc.) so the user is never told "submitted"
-        // when nothing was stored.
-        const insertResponse = await dbInsert('ratings', rating);
-        const insertedRow = Array.isArray(insertResponse) ? insertResponse[0] : insertResponse;
-        if (!insertedRow || !insertedRow.id) {
-            throw new Error('Insert returned no row — submission was not stored.');
-        }
-        const verifyRows = await dbSelect('ratings', `select=id&id=eq.${insertedRow.id}`);
-        if (!verifyRows || verifyRows.length === 0) {
-            throw new Error(`Insert verification failed for id=${insertedRow.id} — submission was not stored.`);
-        }
-
-        // Add attendee automatically
-        // CRITICAL FIX: Use the ranking ID directly from form_config instead of label matching
-        // This prevents attendees being routed to wrong burgers when labels don't match
+        // Resolve the stable result_id for this burger up front (the RPC needs it).
+        // Prefer active_burger_result_id; fall back to ranking, then label matching (M4).
         const ranking = config.active_burger_ranking;
         const formResultId = config.active_burger_result_id;
-        if (ranking) {
-            try {
-                await dbInsert('attendees', {
-                    result_id: formResultId ? parseInt(formResultId) : getResultIdForRanking(ranking),
-                    name: rating.name,
-                });
-            } catch (attendeeErr) {
-                console.error('Failed to add attendee:', attendeeErr);
-            }
-        } else {
-            // Fallback: If active_burger_ranking is not set (old data), try label matching
-            console.warn('active_burger_ranking not found, using fallback label matching');
-            const burgerToRanking = {};
+        let attendeeResultId = formResultId ? parseInt(formResultId) : (ranking ? getResultIdForRanking(ranking) : null);
+
+        if (!attendeeResultId && config.active_burger) {
+            console.warn('active_burger_result_id/ranking not set, using fallback label matching');
+            const burgerToResultId = {};
             burgerData.forEach(row => {
                 const label = `${row['Restaurant']} — ${row['Description']}`;
-                burgerToRanking[label] = row['Ranking'];
+                burgerToResultId[label] = row['ResultId'];
             });
-            let fallbackRanking = burgerToRanking[config.active_burger];
-            // If exact match fails, try fuzzy matching for truncated labels
-            if (!fallbackRanking && config.active_burger) {
-                for (const [fullLabel, rank] of Object.entries(burgerToRanking)) {
+            attendeeResultId = burgerToResultId[config.active_burger];
+            if (!attendeeResultId) {
+                for (const [fullLabel, rid] of Object.entries(burgerToResultId)) {
                     if (matchesBurgerLabel(config.active_burger, fullLabel)) {
-                        fallbackRanking = rank;
+                        attendeeResultId = rid;
                         break;
                     }
                 }
             }
-            if (fallbackRanking) {
-                try {
-                    await dbInsert('attendees', {
-                        result_id: getResultIdForRanking(fallbackRanking),
-                        name: rating.name,
-                    });
-                } catch (attendeeErr) {
-                    console.error('Failed to add attendee (fallback):', attendeeErr);
+        }
+
+        // Upload photo (if any) first so we can attach its URL. The duplicate
+        // pre-check above already rejects the common duplicate case before upload.
+        const photoFile = document.getElementById('photoUpload').files[0];
+        let photoUrl = null;
+        let galleryLabel = null;
+        if (photoFile) {
+            try {
+                const fileName = safeStorageName('ratings', photoFile);
+                photoUrl = await storageUpload('photos', fileName, photoFile);
+                // Build clean label: "Restaurant" or "Restaurant - BURGER TYPE" for multi-burger venues
+                const gParts = (config.active_burger || '').split(' — ');
+                galleryLabel = gParts[0];
+                if (gParts.length > 1) {
+                    const sameRest = burgerData.filter(b => b['Restaurant'] === gParts[0]);
+                    if (sameRest.length > 1) {
+                        const shortDesc = gParts[1].split(' - ')[0].trim();
+                        galleryLabel += ' - ' + (shortDesc.length > 40 ? shortDesc.substring(0, 37) + '...' : shortDesc);
+                    }
+                }
+            } catch (uploadErr) {
+                console.error('Photo upload failed, submitting without photo:', uploadErr);
+            }
+        }
+
+        // Submit via the atomic submit_rating RPC (M1). If it isn't deployed yet
+        // (404), fall back to the legacy multi-step path so the site keeps working.
+        let submitted = false;
+        if (attendeeResultId) {
+            try {
+                const rpcRes = await rpcCall('submit_rating', {
+                    p_result_id: parseInt(attendeeResultId),
+                    p_name: raterName,
+                    p_toppings: toppings,
+                    p_bun: bun,
+                    p_doneness: doneness,
+                    p_flavor: flavor,
+                    p_burger: config.active_burger,
+                    p_photo_url: photoUrl,
+                    p_gallery_label: galleryLabel,
+                });
+                submitted = true;
+                if (rpcRes && rpcRes.status === 'duplicate') {
+                    msg.textContent = 'You have already submitted a rating for this burger.';
+                    msg.className = 'form-message error';
+                    submitBtn.disabled = false;
+                    return;
+                }
+                if (rpcRes && rpcRes.status === 'error') {
+                    throw new Error(rpcRes.message || 'Submission rejected.');
+                }
+            } catch (rpcErr) {
+                if (rpcErr && (rpcErr.status === 404 || rpcErr.status === 400)) {
+                    console.warn('submit_rating RPC unavailable, using legacy path:', rpcErr.message);
+                    submitted = false;
+                } else {
+                    throw rpcErr;
                 }
             }
         }
 
-        // If new member was added, insert into members table and refresh dropdown
+        if (!submitted) {
+            // Legacy fallback path (pre-Phase-3 DB): do each write client-side.
+            if (photoUrl) {
+                rating.photo_url = photoUrl;
+                try {
+                    await dbInsert('gallery', {
+                        url: photoUrl,
+                        restaurant: galleryLabel,
+                        caption: `Rated by ${rating.name}`,
+                        uploaded_by: rating.name,
+                    });
+                } catch (gErr) {
+                    console.error('Gallery insert failed:', gErr);
+                }
+            }
+            // Insert and verify the row actually landed (guards against silent
+            // proxy/extension/network failures returning a fake 200).
+            const insertResponse = await dbInsert('ratings', rating);
+            const insertedRow = Array.isArray(insertResponse) ? insertResponse[0] : insertResponse;
+            if (!insertedRow || !insertedRow.id) {
+                throw new Error('Insert returned no row — submission was not stored.');
+            }
+            const verifyRows = await dbSelect('ratings', `select=id&id=eq.${insertedRow.id}`);
+            if (!verifyRows || verifyRows.length === 0) {
+                throw new Error(`Insert verification failed for id=${insertedRow.id} — submission was not stored.`);
+            }
+            if (attendeeResultId) {
+                try {
+                    await dbInsert('attendees', { result_id: parseInt(attendeeResultId), name: rating.name });
+                } catch (attendeeErr) {
+                    console.error('Failed to add attendee:', attendeeErr);
+                }
+            }
+            await updateBurgerRating(config.active_burger, config.active_burger_ranking, formResultId);
+        }
+
+        // New member: the RPC (or the legacy insert below) creates the member row;
+        // just make sure it exists and refresh the dropdown.
         if (raterSelect.value === '__new__' && raterName) {
             try {
-                await dbInsert('members', { name: raterName });
+                if (!submitted) {
+                    await dbInsert('members', { name: raterName });
+                }
                 await loadMembers();
                 populateRaterNameSelect();
             } catch (memberErr) {
                 // Ignore duplicate error — member may already exist
-                console.warn('Member insert (may already exist):', memberErr);
+                console.warn('Member refresh (may already exist):', memberErr);
             }
         }
 
@@ -1111,12 +1215,16 @@ async function handleFormSubmit(e) {
         document.getElementById('raterNameNew').required = false;
 
         // Reload gallery if photo was uploaded
-        if (photoFile) {
+        if (photoUrl) {
             await loadGallery();
         }
 
-        // Recalculate and update burger rating in results table
-        await updateBurgerRating(config.active_burger, config.active_burger_ranking, formResultId);
+        // The RPC recomputed ratings + rankings server-side; refresh the UI.
+        // (The legacy path already refreshed via updateBurgerRating.)
+        if (submitted) {
+            await loadRankings();
+            rebuildMap();
+        }
     } catch (err) {
         console.error('Submit error:', err);
         const detail = (err && err.message) ? err.message : String(err);
@@ -1139,9 +1247,9 @@ async function updateBurgerRating(burgerLabel, ranking, resultId) {
 
         const fullLabel = (result['Restaurant'] || '') + ' — ' + (result['Description'] || '');
 
-        // Fetch all ratings and use fuzzy matching (handles truncated labels like "Ched...")
+        // Fetch all ratings and join by stable result_id (label fallback for legacy rows)
         const allRatings = await dbSelect('ratings', 'select=*');
-        const matching = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
+        const matching = allRatings.filter(r => ratingMatchesResult(r, updateId, fullLabel));
 
         if (matching.length === 0) return;
 
@@ -1186,8 +1294,8 @@ async function recalculateAllRatings() {
         let updated = 0;
         for (const result of allResults) {
             const fullLabel = result.restaurant + (result.description ? ' — ' + result.description : '');
-            // Match ratings: exact match OR ratings burger starts with "Restaurant — " (handles truncated labels)
-            const matching = allRatings.filter(r => matchesBurgerLabel(r.burger, fullLabel));
+            // Join by stable result_id (label fallback for legacy rows lacking it)
+            const matching = allRatings.filter(r => ratingMatchesResult(r, result.id, fullLabel));
 
             if (matching.length > 0) {
                 const avgToppings = matching.reduce((sum, r) => sum + (r.toppings || 0), 0) / matching.length;
@@ -1512,7 +1620,6 @@ async function loadAdminData() {
             const sorted = [...burgerData].sort((a, b) =>
                 (a['Restaurant'] || '').localeCompare(b['Restaurant'] || ''));
             burgerListDiv.innerHTML = sorted.map(row => {
-                const safeRestaurant = escapeHtml(row['Restaurant'] || '').replace(/'/g, "\\'");
                 return `
                 <div class="admin-burger-entry">
                     <div class="admin-burger-info">
@@ -1520,7 +1627,7 @@ async function loadAdminData() {
                         <span class="admin-burger-desc">${escapeHtml(row['Description'])}</span>
                         <span class="admin-burger-meta">${escapeHtml(row['Price'])} · ${escapeHtml(row['Location'])} · ${escapeHtml(row['Date of Visit'])}</span>
                     </div>
-                    <button class="btn-delete-burger" onclick="deleteBurger(${escapeHtml(row['Ranking'])}, '${safeRestaurant}')" title="Delete this burger">&times;</button>
+                    <button class="btn-delete-burger" data-action="delete-burger" data-ranking="${escapeHtml(row['Ranking'])}" data-restaurant="${escapeHtml(row['Restaurant'] || '')}" title="Delete this burger">&times;</button>
                 </div>
             `}).join('');
         } else {
@@ -1886,7 +1993,7 @@ async function handleGalleryUpload() {
 
     try {
         for (const file of files) {
-            const fileName = `gallery/${Date.now()}_${file.name}`;
+            const fileName = safeStorageName('gallery', file);
             const publicUrl = await storageUpload('photos', fileName, file);
 
             // Build clean gallery label: "Restaurant" or "Restaurant - BURGER TYPE" for multi-burger venues
@@ -2099,7 +2206,6 @@ async function loadSuggestions() {
 
         listDiv.innerHTML = data.map(s => {
             const created = new Date(s.created_at).toLocaleString();
-            const safeName = escapeHtml(s.name).replace(/'/g, "\\'");
             const addressedHtml = s.addressed
                 ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
                 : '';
@@ -2118,7 +2224,7 @@ async function loadSuggestions() {
                         <div class="suggestion-text">${escapeHtml(s.suggestion)}</div>
                         ${addressedHtml}
                     </div>
-                    <button class="btn-delete-suggestion" onclick="deleteSuggestion(${s.id}, '${safeName}')" title="Delete this suggestion">&times;</button>
+                    <button class="btn-delete-suggestion" data-action="delete-suggestion" data-id="${s.id}" data-name="${escapeHtml(s.name)}" title="Delete this suggestion">&times;</button>
                 </div>
             `;
         }).join('');
@@ -2213,7 +2319,6 @@ async function loadRequests() {
 
         listDiv.innerHTML = data.map(s => {
             const created = new Date(s.created_at).toLocaleString();
-            const safeName = escapeHtml(s.name).replace(/'/g, "\\'");
             const addressedHtml = s.addressed
                 ? `<div class="suggestion-addressed">Addressed ${new Date(s.addressed_at).toLocaleString()}</div>`
                 : '';
@@ -2232,7 +2337,7 @@ async function loadRequests() {
                         <div class="suggestion-text">${escapeHtml(s.request)}</div>
                         ${addressedHtml}
                     </div>
-                    <button class="btn-delete-suggestion" onclick="deleteRequest(${s.id}, '${safeName}')" title="Delete this request">&times;</button>
+                    <button class="btn-delete-suggestion" data-action="delete-request" data-id="${s.id}" data-name="${escapeHtml(s.name)}" title="Delete this request">&times;</button>
                 </div>
             `;
         }).join('');
@@ -2274,8 +2379,14 @@ async function deleteRequest(id, name) {
 // ============================================
 
 function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/\//g, '&#x2F;');
 }
 
 function abbrevState(stateName) {
@@ -2397,31 +2508,32 @@ async function loadAttendeesManager() {
         let html = '';
         for (const row of burgerData) {
             const ranking = row['Ranking'];
-            const attendees = attendeesData[ranking] || [];
+            const resultId = row['ResultId'];
+            const attendees = attendeesData[resultId] || [];
 
             html += `
                 <div class="attendees-manager-item" style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;">
                     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;">
-                        <strong style="color:var(--red);">#${ranking} ${escapeHtml(row['Restaurant'])}</strong>
+                        <strong style="color:var(--red);">#${escapeHtml(ranking)} ${escapeHtml(row['Restaurant'])}</strong>
                         <span style="font-size:0.85em;color:var(--text-muted);">${attendees.length} attendee${attendees.length !== 1 ? 's' : ''}</span>
                     </div>
-                    <div id="attendees-list-${ranking}" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-                        ${attendees.map((name, i) => {
+                    <div id="attendees-list-${escapeHtml(resultId)}" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+                        ${attendees.map((name) => {
                             const isUnknown = name.startsWith('Unknown ');
                             return `
                             <div class="attendee-tag ${isUnknown ? 'unknown-attendee' : ''}">
-                                <span ${isUnknown ? `onclick="editUnknownAttendee(${ranking}, '${escapeHtml(name).replace(/'/g, "\\'")}')" style="cursor:pointer;" title="Click to edit"` : ''}>
+                                <span ${isUnknown ? `data-action="edit-unknown-attendee" data-result-id="${escapeHtml(resultId)}" data-name="${escapeHtml(name)}" style="cursor:pointer;" title="Click to edit"` : ''}>
                                     ${escapeHtml(name)}
                                     ${isUnknown ? ' ✏️' : ''}
                                 </span>
-                                <button class="tag-remove" onclick="removeAttendee(${ranking}, '${escapeHtml(name).replace(/'/g, "\\'")}')">×</button>
+                                <button class="tag-remove" data-action="remove-attendee" data-result-id="${escapeHtml(resultId)}" data-name="${escapeHtml(name)}">×</button>
                             </div>
                         `;
                         }).join('')}
                     </div>
                     <div style="display:flex;gap:8px;">
-                        <input type="text" id="add-attendee-${ranking}" placeholder="Add attendee name" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
-                        <button class="btn-small" onclick="addAttendee(${ranking})">Add</button>
+                        <input type="text" id="add-attendee-${escapeHtml(resultId)}" placeholder="Add attendee name" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:4px;">
+                        <button class="btn-small" data-action="add-attendee" data-result-id="${escapeHtml(resultId)}">Add</button>
                     </div>
                 </div>
             `;
@@ -2433,8 +2545,9 @@ async function loadAttendeesManager() {
     }
 }
 
-async function addAttendee(ranking) {
-    const input = document.getElementById(`add-attendee-${ranking}`);
+async function addAttendee(resultId) {
+    resultId = parseInt(resultId, 10);
+    const input = document.getElementById(`add-attendee-${resultId}`);
     const name = input.value.trim();
 
     if (!name) {
@@ -2444,7 +2557,6 @@ async function addAttendee(ranking) {
 
     try {
         // Check for duplicate name on this burger
-        const resultId = getResultIdForRanking(ranking);
         const existing = await dbSelect('attendees', `select=id&result_id=eq.${resultId}&name=eq.${encodeURIComponent(name)}`);
         if (existing && existing.length > 0) {
             alert(name + ' is already listed for this burger.');
@@ -2466,12 +2578,12 @@ async function addAttendee(ranking) {
     }
 }
 
-async function removeAttendee(ranking, name) {
+async function removeAttendee(resultId, name) {
+    resultId = parseInt(resultId, 10);
     if (!confirm(`Remove ${name} from this burger's attendees?`)) return;
 
     try {
         // Find and delete the attendee entry
-        const resultId = getResultIdForRanking(ranking);
         const all = await dbSelect('attendees', `select=*&result_id=eq.${resultId}&name=eq.${encodeURIComponent(name)}`);
         if (all && all.length > 0) {
             await dbDelete('attendees', 'id', all[0].id);
@@ -2486,14 +2598,14 @@ async function removeAttendee(ranking, name) {
     }
 }
 
-async function editUnknownAttendee(ranking, oldName) {
+async function editUnknownAttendee(resultId, oldName) {
+    resultId = parseInt(resultId, 10);
     const newName = prompt(`Replace "${oldName}" with:`, '');
     if (!newName || newName.trim() === '') return;
     if (newName.trim() === oldName) return;
 
     try {
         // Find the attendee entry
-        const resultId = getResultIdForRanking(ranking);
         const all = await dbSelect('attendees', `select=*&result_id=eq.${resultId}&name=eq.${encodeURIComponent(oldName)}`);
         if (all && all.length > 0) {
             // Update the name
@@ -2605,9 +2717,9 @@ function showMainIndividualAttendance() {
     }
 
     const attended = [];
-    for (const [ranking, names] of Object.entries(attendeesData)) {
+    for (const [resultId, names] of Object.entries(attendeesData)) {
         if (names.includes(name)) {
-            const burger = burgerData.find(b => b['Ranking'] == ranking);
+            const burger = burgerData.find(b => String(b['ResultId']) === String(resultId));
             if (burger) attended.push(burger);
         }
     }
@@ -2651,9 +2763,9 @@ function compareMainAttendance() {
     const memberAttendance = {};
     selectedMembers.forEach(name => {
         memberAttendance[name] = [];
-        for (const [ranking, names] of Object.entries(attendeesData)) {
+        for (const [resultId, names] of Object.entries(attendeesData)) {
             if (names.includes(name)) {
-                const burger = burgerData.find(b => b['Ranking'] == ranking);
+                const burger = burgerData.find(b => String(b['ResultId']) === String(resultId));
                 if (burger) memberAttendance[name].push(burger);
             }
         }
