@@ -2,11 +2,11 @@ name: Supabase Keepalive
 
 # Pings the Supabase REST API on a schedule so the free-tier project
 # does not auto-pause after 7 days of inactivity.
-# Runs Monday and Thursday at 14:00 UTC (max 4-day gap).
+# Runs Mon/Wed/Fri at 14:00 UTC (max 2-day gap, well under the 7-day pause threshold).
 
 on:
   schedule:
-    - cron: '0 14 * * 1,4'
+    - cron: '0 14 * * 1,3,5'
   workflow_dispatch:  # allows manual runs from the Actions tab
 
 jobs:
