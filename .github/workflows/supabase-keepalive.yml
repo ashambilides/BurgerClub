@@ -18,13 +18,23 @@ jobs:
           SUPABASE_URL: https://yezihsgtccwitfwgwudv.supabase.co
           SUPABASE_ANON_KEY: sb_publishable_QL9pwpFDUqF5QHhSytvVmQ_Jkv3JvQU
         run: |
-          status=$(curl -s -o /tmp/body -w "%{http_code}" \
-            "$SUPABASE_URL/rest/v1/results?select=id&limit=1" \
-            -H "apikey: $SUPABASE_ANON_KEY")
-          echo "HTTP status: $status"
-          cat /tmp/body
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Keepalive ping failed"
-            exit 1
-          fi
-          echo "Keepalive ping OK"
+          # A paused/cold free-tier project can miss the first request while it wakes,
+          # so retry with backoff and treat any eventual 2xx as success. A single-shot
+          # ping would false-report failure precisely when the project needed waking.
+          url="$SUPABASE_URL/rest/v1/results?select=id&limit=1"
+          attempts=5
+          delay=15
+          for i in $(seq 1 $attempts); do
+            status=$(curl -s -o /tmp/body -w "%{http_code}" --max-time 30               "$url" -H "apikey: $SUPABASE_ANON_KEY" || echo 000)
+            echo "Attempt $i/$attempts: HTTP $status"
+            if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
+              echo "Keepalive ping OK"
+              cat /tmp/body
+              exit 0
+            fi
+            echo "Not up yet (status $status) - project may be waking; retrying in ${delay}s"
+            cat /tmp/body 2>/dev/null || true
+            [ "$i" -lt "$attempts" ] && sleep $delay
+          done
+          echo "Keepalive ping failed after $attempts attempts"
+          exit 1
