@@ -1,40 +1,81 @@
 name: Supabase Keepalive
 
-# Pings the Supabase REST API on a schedule so the free-tier project
-# does not auto-pause after 7 days of inactivity.
-# Runs Mon/Wed/Fri at 14:00 UTC (max 2-day gap, well under the 7-day pause threshold).
+# Keeps the free-tier Supabase project from being auto-paused.
+#
+# IMPORTANT: Supabase does not pause only on *zero* activity. The stated policy is
+# "Free Plan projects that show low activity over a 7-day period", and their
+# guidance is that "a few user requests to the database each day over the previous
+# week is enough to keep the project from being paused".
+#   https://supabase.com/docs/guides/platform/free-project-pausing
+#
+# The previous schedule (Mon/Wed/Fri, exiting after the first successful request)
+# produced 3 database requests per week across 3 of 7 days. That was built against
+# a "zero activity for 7 days" model and sat well under Supabase's actual bar, so
+# the project kept pausing even though every run reported success.
+#
+# This runs every 4 hours, every day, and issues several distinct queries per run:
+# ~18 database requests/day spread across all 7 days.
 
 on:
   schedule:
-    - cron: '0 14 * * 1,3,5'
+    - cron: '0 */4 * * *'
   workflow_dispatch:  # allows manual runs from the Actions tab
+
+# A cold project can take a while to wake; don't let runs pile up on each other.
+concurrency:
+  group: supabase-keepalive
+  cancel-in-progress: false
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Hit Supabase REST endpoint
+      - name: Hit Supabase REST endpoints
         env:
           SUPABASE_URL: https://yezihsgtccwitfwgwudv.supabase.co
           SUPABASE_ANON_KEY: sb_publishable_QL9pwpFDUqF5QHhSytvVmQ_Jkv3JvQU
         run: |
-          # A paused/cold free-tier project can miss the first request while it wakes,
-          # so retry with backoff and treat any eventual 2xx as success. A single-shot
-          # ping would false-report failure precisely when the project needed waking.
-          url="$SUPABASE_URL/rest/v1/results?select=id&limit=1"
-          attempts=5
-          delay=15
-          for i in $(seq 1 $attempts); do
-            status=$(curl -s -o /tmp/body -w "%{http_code}" --max-time 30               "$url" -H "apikey: $SUPABASE_ANON_KEY" || echo 000)
-            echo "Attempt $i/$attempts: HTTP $status"
-            if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
-              echo "Keepalive ping OK"
-              cat /tmp/body
-              exit 0
-            fi
-            echo "Not up yet (status $status) - project may be waking; retrying in ${delay}s"
-            cat /tmp/body 2>/dev/null || true
-            [ "$i" -lt "$attempts" ] && sleep $delay
+          set -u
+
+          # A paused/cold project can miss the first request while it wakes, so retry
+          # with backoff and treat any eventual 2xx as success. A single-shot ping
+          # would false-report failure precisely when the project needed waking.
+          ping_table() {
+            table="$1"
+            url="$SUPABASE_URL/rest/v1/${table}?select=id&limit=1"
+            attempts=5
+            delay=15
+            i=1
+            while [ "$i" -le "$attempts" ]; do
+              status=$(curl -s -o /tmp/body -w "%{http_code}" --max-time 30 \
+                "$url" \
+                -H "apikey: $SUPABASE_ANON_KEY" \
+                -H "Cache-Control: no-cache" || echo 000)
+              echo "  [$table] attempt $i/$attempts: HTTP $status"
+              if [ "$status" -ge 200 ] && [ "$status" -lt 300 ]; then
+                echo "  [$table] OK -> $(cat /tmp/body)"
+                return 0
+              fi
+              cat /tmp/body 2>/dev/null || true
+              if [ "$i" -lt "$attempts" ]; then
+                echo "  [$table] not up yet - project may be waking; retrying in ${delay}s"
+                sleep "$delay"
+              fi
+              i=$((i + 1))
+            done
+            echo "  [$table] FAILED after $attempts attempts"
+            return 1
+          }
+
+          # Query several distinct tables so each run registers as real database
+          # activity rather than one request a cache could absorb.
+          failed=0
+          for table in results members attendees; do
+            ping_table "$table" || failed=1
           done
-          echo "Keepalive ping failed after $attempts attempts"
-          exit 1
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Keepalive FAILED"
+            exit 1
+          fi
+          echo "Keepalive OK - 3 queries issued"
