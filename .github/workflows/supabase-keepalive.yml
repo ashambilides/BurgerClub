@@ -79,3 +79,28 @@ jobs:
             exit 1
           fi
           echo "Keepalive OK - 3 queries issued"
+
+  # GitHub disables scheduled workflows in public repos after 60 days with no repo
+  # activity, which silently stops the ping job above. If the last commit is older
+  # than 30 days, push a tiny timestamp commit so the repo never reaches 60.
+  stay-enabled:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit a timestamp if the repo has been quiet for 30+ days
+        run: |
+          last=$(git log -1 --format=%ct)
+          age_days=$(( ($(date +%s) - last) / 86400 ))
+          echo "Last commit was $age_days days ago"
+          if [ "$age_days" -lt 30 ]; then
+            echo "Recent enough - nothing to do"
+            exit 0
+          fi
+          date -u +%Y-%m-%dT%H:%M:%SZ > .github/keepalive-stamp
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive-stamp
+          git commit -m "Keepalive: prevent 60-day scheduled-workflow auto-disable"
+          git push
